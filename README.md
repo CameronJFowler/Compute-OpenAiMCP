@@ -1,0 +1,217 @@
+# Compute
+
+**A quantitative research bench that a human and an agent operate together — and that keeps score of how many hypotheses have been tested.**
+
+Compute is a static page with no backend. All computation — OLS with HAC standard errors, a look-ahead-free cross-sectional backtester, a stationary block bootstrap — runs in the browser in TypeScript. It exposes itself to an agent through [WebMCP](https://github.com/webmachinelearning/webmcp), and the whole design turns on one thing that only an in-page tool can do.
+
+---
+
+## Why this needs WebMCP and not an MCP server
+
+The fair question about any WebMCP entry is: *why isn't this just a headless MCP server?* A tool that runs a regression over a bundled CSV does not need a browser.
+
+Compute is built so that every tool is inseparable from the page.
+
+### 1. The tool surface is generated from live page state
+
+`registerTool` can be called at any time. When a dataset loads, Compute tears down the analysis tools and registers them again with **that dataset's actual column names baked into the `enum` of their `inputSchema`**.
+
+The agent cannot pass an invalid column, because an invalid column is not expressible in the schema it was handed. Add a derived column with `add_feature` and the enums grow to include it, immediately, with nothing told to the agent. A static MCP manifest — fixed at connect time, before anyone knows which dataset is loaded — physically cannot do this.
+
+You can watch it happen: the tool count goes **4 → 12** when a dataset loads, **→ 13** when a signal column is created, **→ 14** after a backtest exists.
+
+| State | Tools |
+|---|---|
+| Nothing loaded | `list_datasets` `get_state` `load_dataset` `set_hypothesis` |
+| Dataset loaded | `+ describe_dataset` `add_feature` `summary_stats` `correlate` `run_regression` `hypothesis_test` `record_finding` `build_report` |
+| A causal derived signal exists | `+ run_backtest` |
+| A backtest exists | `+ bootstrap_strategy` |
+
+A tool that cannot succeed in the current state is not visible. `run_backtest` does not exist until there is something to sort on.
+
+### 2. Split results: the number goes to the agent, the picture goes to the screen
+
+A tool call returns at most 1,500 characters — coefficients, t-stats, a verdict. The same call pushes the full series into the workspace store and the chart redraws. One call, two audiences, and the large object never crosses the boundary to the model. Only an in-page tool can do both.
+
+### 3. Shared mutable state — the human can grab the wheel mid-run
+
+There is one `workspace` object. When the human drags the sample window, the agent's *next* tool call reads the new window, because it reads the same store. No second copy, no sync protocol. Both parties are operating one instrument.
+
+### 4. Human-in-the-loop gates rendered in the page
+
+A bootstrap above 2,000 simulations renders an approval card and the tool call `await`s a click. Overwriting an existing report does the same. From the agent's side the call simply takes longer.
+
+### 5. Provenance and replay
+
+Every tool call is appended to a run log with arguments, a result digest and a timestamp. `record_finding` **refuses a claim that does not cite a step that actually ran** — which makes fabrication structurally awkward rather than merely discouraged.
+
+---
+
+## The idea underneath it
+
+An agent can test five hundred hypotheses a minute. A human cannot. Nothing in the current research stack keeps score.
+
+Compute counts every hypothesis tested in the session and shows the multiple-comparison-adjusted threshold, live, in the header:
+
+```
+TESTED  7     ADJUSTED ALPHA  0.00714
+● Latest result is not significant once adjusted
+```
+
+`run_regression` and `hypothesis_test` return this block in their payload, so **the agent has to confront it in its own reasoning**, not just the human. A regression registers *every* slope as a test, not just the one you would report — reporting the best of five coefficients as a single test is exactly the behaviour the counter exists to make visible.
+
+Agent-driven research makes p-hacking effectively free. The environment is the only place the brake can live.
+
+---
+
+## Running it
+
+```bash
+npm install
+npm run dev
+```
+
+Then open http://localhost:5180. Add `?dev=1` for the dev console, which lists every currently registered tool with its schema and lets you execute it with JSON arguments — no agent required. The tool list in that console rebuilds itself as the workspace changes, which is the most direct way to see the reactive registry working.
+
+```bash
+npm test          # 160 tests
+npm run build     # typecheck + production build
+```
+
+### Seeing the WebMCP side
+
+WebMCP needs a browser that implements it and a secure context (`localhost` counts).
+
+- **ChatGPT's in-app browser** supports it out of the box.
+- **Chrome** from version 149 via origin trial, or with the testing flag: open `chrome://flags`, search `webmcp`, and enable it (reported as both `#enable-webmcp-testing` and `#enable-webmcp-for-testing` depending on build).
+- To make the deployed page work in stock Chrome without a flag, paste an origin-trial token into the `<meta http-equiv="origin-trial">` tag in [`index.html`](index.html).
+
+The page is honest when no host is present: the status chip in the header says `Agent · not attached`, and the registry still publishes its intended tool list, so the capability count is a statement about what this page offers rather than about what one browser managed to accept.
+
+### What the page shows, and what it doesn't
+
+The interface is the researcher's, not the agent's. There is no tool inspector, no JSON call log, no debug surface in the default view — those belong to the machine and the machine already has them. What a human needs from an agent-operated bench is different: the question, the data, the window they control, the results, how many hypotheses have been tested, and an approval card when something expensive is about to happen.
+
+The one agent-facing number that stays visible is the capability count in the header, because it changes underneath the operator — and because watching it go from 4 to 12 is the clearest possible evidence that the page rewrote the agent's tool list.
+
+---
+
+## Architecture
+
+```
+  ChatGPT / Chrome agent
+          │  document.modelContext  (tool call)
+          ▼
+  ┌──────────────────────────────────────────────┐
+  │  Compute page — static, no server            │
+  │                                              │
+  │   webmcp/registry.ts ──► workspace store     │
+  │        │  (reactive)         (Zustand)       │
+  │        │                       │             │
+  │        │                       ├─► React UI  │
+  │        │                       │   charts,   │
+  │        ▼                       │   tables,   │
+  │   webmcp/tools/*.ts            │   run log   │
+  │        │                       │             │
+  │        └─► engine/*.ts ────────┘             │
+  │            OLS · HAC · distributions ·       │
+  │            features · backtest · bootstrap   │
+  └──────────────────────────────────────────────┘
+                     │
+           bundled CSVs in /public/data
+```
+
+Zustand rather than React context, deliberately: WebMCP tool functions are plain non-React code that must read and mutate React state from outside the component tree, and `useWorkspace.getState()` does that in one line.
+
+Chart.js is bundled from npm, never a CDN. The page makes no third-party network requests at all.
+
+### Layout
+
+```
+src/
+  config.ts               APP_NAME, thresholds, the dataset manifest
+  state/workspace.ts      the single source of truth
+  state/runlog.ts         provenance
+  webmcp/
+    host.ts               entry-point shim + AbortSignal teardown
+    result.ts             result/error adapters, 1500-char cap
+    registry.ts           reactive register/unregister, serialized
+    availability.ts       which tools exist right now
+    schemas.ts            schema builders bound to live columns
+    tools/                session · features · analysis · strategy · report
+  engine/
+    matrix.ts             Householder QR, Cholesky, collinearity diagnostic
+    dist.ts               incomplete beta/gamma → t, F, chi², normal
+    ols.ts                OLS + classical and Newey-West HAC
+    stats.ts              moments, ACF, correlation, drawdown
+    features.ts           causal transforms (+ one that is not, labelled)
+    backtest.ts           cross-sectional long/short, no look-ahead
+    bootstrap.ts          stationary block bootstrap
+    multipletests.ts      session counter, Bonferroni, Benjamini-Hochberg
+    frame.ts, loader.ts   the table model and CSV parsing
+  ui/                     Brief · WorkspacePanel · ApprovalCard ·
+                          ActivityLog · AgentStatus · Chart · DevConsole
+```
+
+---
+
+## The statistics are tested, not asserted
+
+`npm test` runs 160 tests. The numerical ones are checked against fixtures generated offline by SciPy and NumPy ([`scripts/make_fixtures.py`](scripts/make_fixtures.py)) and committed as JSON — nothing here is a value the implementation produced and was then blessed.
+
+- **Distributions** match `scipy.stats` to 1e-11 relative. The t, F and χ² CDFs are built on a Lentz continued fraction for the regularized incomplete beta and a series/continued-fraction incomplete gamma.
+- **OLS coefficients** are checked against `numpy.linalg.lstsq` (LAPACK SVD) — a genuinely different algorithm from the Householder QR under test. Standard errors, R², and the F statistics are checked against a NumPy reference implementation of the same estimators.
+- **Newey-West** is verified to produce larger standard errors than classical ones under an AR(1) error of 0.85, which is the reason it is the default.
+- **Causality** is a property test: every causal transform is recomputed on a frame truncated to an earlier end date, and every surviving value must be bit-identical. `forward_return` is asserted to *fail* that same test, which is how we know the test can fail.
+- **Look-ahead** in the backtester is pinned from both sides. A signal equal to *tomorrow's* return must produce an absurd Sharpe ratio (> 8); a signal equal to *today's* return, knowable at formation time, must produce roughly nothing (< 2). If the alignment were off by one day in either direction, those two results would swap.
+- **The registry** is exercised against a mock host implementing `index.bs` as written — `registerTool` returns a promise, duplicate names *reject* rather than replace, there is no `unregisterTool`, and teardown happens by aborting the signal. Concurrent syncs are asserted to serialize without duplicate rejections.
+- **End to end**, against the real bundled CSVs, through the real tool surface: the full chain from `load_dataset` to `build_report`, the approval gate suspending and resuming a call, and an adversarial pass — misspelled columns, wrong types, calls made out of order, a forward-looking column used as a predictor.
+
+### Declared deviations from the brief
+
+- **Fourteen tools, not eleven.** The brief says eleven and then enumerates fourteen. Fourteen is what ships.
+- **`hypothesis_test` offers four tests, not five.** `f_test_joint` is absent because `run_regression` already returns the joint F on every call — with a HAC Wald statistic when Newey-West errors are selected, since the R²-based form is not valid there. A second entry point to the same test would be a way to run it without the multiple-testing counter noticing.
+- **The equity panel is 49 industry portfolios, not 50 individual tickers.** Stooq now serves a bot-verification interstitial instead of CSV. See `SOURCES.md`.
+- **No Web Worker.** The bootstrap chunks on the main thread and yields between batches, which keeps the progress bar and the approval card responsive without a message protocol.
+
+### A note on the WebMCP spec
+
+The spec moved twice in 2026 and much of the secondary documentation is stale. Per [`index.bs`](https://github.com/webmachinelearning/webmcp) on `main`:
+
+- The entry point is **`document.modelContext`**. The getter moved from `Navigator` to `Document` in May 2026; `navigator.modelContext` survives as a deprecated alias.
+- **There is no `unregisterTool`.** It was removed in April 2026 in favour of an `AbortSignal` passed as `registerTool(tool, { signal })`.
+- Registering a name that already exists **rejects** rather than replacing it.
+
+[`src/webmcp/host.ts`](src/webmcp/host.ts) resolves both spellings, prefers `AbortController` teardown, and falls back to `unregisterTool` for polyfills that still ship it. If the spec moves again, that is a one-file change.
+
+---
+
+## Data
+
+Three datasets, bundled and committed. No API key, no rate limit, nothing that can go down. Full provenance in [`public/data/SOURCES.md`](public/data/SOURCES.md).
+
+| File | What | Source |
+|---|---|---|
+| `industries_daily.csv` | 49 US industry portfolios, daily value-weighted returns, 2015–2025 (2,766 days × 49 = 135,534 rows) | Kenneth R. French Data Library |
+| `ff_factors_daily.csv` | Fama-French 3 factors + RF, daily | Kenneth R. French Data Library |
+| `hubble_1929.csv` | 24 galaxies: distance (Mpc), radial velocity (km/s) | Hubble (1929), *PNAS* 15(3):168–173, Table 1 |
+
+The factor file is joined onto the industry panel by date at load time, so a market-beta control is available without the agent aligning a second dataset by hand.
+
+Hubble is the generality demo. The *same* `run_regression` fits `v = H₀·d` and recovers Hubble's original constant of about 450 km/s/Mpc — roughly seven times the modern value, because his distance ladder was wrong. The bench is the product; finance is the demo.
+
+Regenerate with `python scripts/fetch_data.py`.
+
+---
+
+## Deliberately not built
+
+No accounts, no auth, no live market APIs, no database, no chat UI inside the app — the agent is external, which is the entire point.
+
+**And no arbitrary code execution.** There is no `eval`, no `execute_python`, no free-form query string. Bounded verbs only. An agent driving this page can fit a regression; it cannot run code.
+
+---
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

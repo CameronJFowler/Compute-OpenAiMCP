@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0a0c0f;
+  color: #e4e9ef;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numbers must line up in columns or the tables are unreadable. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.label {
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: #67707c;
+}
+
+input[type="date"] {
+  color-scheme: dark;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #232a33;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #313a45;
+}
+
+/* A single, quiet pulse when an agent-driven call lands. No gradients. */
+@keyframes settle {
+  from {
+    background-color: rgba(217, 164, 65, 0.1);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.settle {
+  animation: settle 900ms ease-out;
+}

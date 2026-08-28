@@ -1,0 +1,4 @@
+# Normalise to LF in the repository, whatever the checkout platform does.
+* text=auto eol=lf
+*.csv text eol=lf
+*.md text eol=lf
