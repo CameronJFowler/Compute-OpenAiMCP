@@ -407,6 +407,27 @@ export function signalColumnNames(): string[] {
   });
 }
 
+/**
+ * Categorical columns, which are what a group comparison splits on.
+ *
+ * This is what lets `hypothesis_test` ask "do these two species differ in body
+ * mass" rather than only "do these two columns differ", and it is populated
+ * from whatever the loaded dataset happens to have.
+ */
+export function categoryColumnNames(): string[] {
+  const frame = getEffectiveFrame();
+  if (!frame) return [];
+  return frame.columnOrder.filter((n) => frame.columns[n].kind === "category");
+}
+
+/** The distinct labels present in a categorical column, for schema enums. */
+export function categoryValues(columnName: string): string[] {
+  const frame = getEffectiveFrame();
+  const column = frame?.columns[columnName];
+  if (!column || column.kind !== "category" || !column.labels) return [];
+  return [...new Set(column.labels.filter((l) => l !== ""))].sort();
+}
+
 /** Columns legal as a regression dependent variable. */
 export function dependentCandidates(): string[] {
   const frame = getEffectiveFrame();

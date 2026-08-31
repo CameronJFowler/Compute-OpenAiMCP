@@ -177,6 +177,121 @@ describe("a full session on the industry panel", () => {
   }, 20000);
 });
 
+/**
+ * The generality claim, tested rather than asserted.
+ *
+ * The same four tools that fit a factor model on an equity panel have to fit a
+ * climate trend on an annual series and compare penguin species in a plain
+ * cross-section, with nothing dataset-specific in the code path. If the loader
+ * or the schemas were quietly finance-shaped, these fail.
+ */
+describe("the same tools on other domains", () => {
+  it("regresses temperature on CO2 and reports the years it had to drop", async () => {
+    const loaded = await call("load_dataset", { dataset_id: "climate_annual" });
+    expect(loaded.isError).toBe(false);
+    expect(loaded.text).toContain("co2_ppm");
+
+    const fit = await call("run_regression", {
+      dependent: "temp_gcag_c",
+      independent: ["co2_ppm"],
+    });
+    expect(fit.isError).toBe(false);
+
+    const slope = Number(fit.text.match(/co2_ppm\s+est=([-\d.]+)/)?.[1]);
+    expect(slope).toBeGreaterThan(0);
+    // The Mauna Loa record starts in 1959; the temperature record starts in
+    // 1850. The overlap is what gets fitted, and the tool has to say so.
+    expect(fit.text).toContain("rows dropped for missing values");
+
+    // A panel-only tool must not be offered on a single series.
+    expect(toolNames()).not.toContain("run_backtest");
+  }, 30000);
+
+  it("runs a paired test between two independent estimates of the same quantity", async () => {
+    await call("load_dataset", { dataset_id: "climate_annual" });
+    const result = await call("hypothesis_test", {
+      test: "paired_t",
+      column: "temp_gcag_c",
+      other_column: "temp_gistemp_c",
+    });
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("H0: the mean of (temp_gcag_c - temp_gistemp_c) is zero.");
+    expect(result.text).toContain("MULTIPLE TESTING");
+  }, 30000);
+
+  it("detects categorical columns in a cross-section without being told", async () => {
+    const loaded = await call("load_dataset", { dataset_id: "penguins" });
+    expect(loaded.isError).toBe(false);
+    expect(loaded.text).toContain("344 rows");
+
+    const described = await call("describe_dataset");
+    expect(described.isError).toBe(false);
+    // species/island/sex are labels; the measurements are numeric. Nothing in
+    // the loader knows the word "species".
+    expect(described.text).toContain("species: category");
+    expect(described.text).toContain("island: category");
+    expect(described.text).toMatch(/body_mass_g: n=\d+/);
+  }, 30000);
+
+  it("compares two groups of one measurement", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+
+    // group_column only appears in the schema when the dataset has categories.
+    const descriptor = currentDescriptors().find((d) => d.name === "hypothesis_test");
+    const groupColumn = descriptor?.inputSchema?.properties?.group_column as {
+      enum: string[];
+    };
+    expect(groupColumn.enum).toContain("species");
+    expect(groupColumn.enum).not.toContain("body_mass_g");
+
+    const result = await call("hypothesis_test", {
+      test: "two_sample_t",
+      column: "body_mass_g",
+      group_column: "species",
+      group_a: "Adelie",
+      group_b: "Gentoo",
+    });
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain(
+      "H0: mean body_mass_g is the same for Adelie and Gentoo.",
+    );
+    // Gentoo are markedly heavier; this is not a marginal result.
+    expect(result.text).toMatch(/p=0\.0000|p=\d\.\d+e-/);
+  }, 30000);
+
+  it("teaches when a group is named wrongly", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+
+    const unknown = await call("hypothesis_test", {
+      test: "two_sample_t", column: "body_mass_g",
+      group_column: "species", group_a: "Adelie", group_b: "Emperor",
+    });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain("Emperor");
+    expect(unknown.text).toContain("Chinstrap");
+
+    const same = await call("hypothesis_test", {
+      test: "two_sample_t", column: "body_mass_g",
+      group_column: "species", group_a: "Adelie", group_b: "Adelie",
+    });
+    expect(same.isError).toBe(true);
+    expect(same.text).toContain("no null hypothesis");
+
+    const notCategorical = await call("hypothesis_test", {
+      test: "two_sample_t", column: "body_mass_g",
+      group_column: "bill_length_mm", group_a: "a", group_b: "b",
+    });
+    expect(notCategorical.isError).toBe(true);
+    expect(notCategorical.text).toContain("not a categorical column");
+  }, 30000);
+
+  it("offers no group arguments at all when the dataset has no categories", async () => {
+    await call("load_dataset", { dataset_id: "climate_annual" });
+    const descriptor = currentDescriptors().find((d) => d.name === "hypothesis_test");
+    expect(descriptor?.inputSchema?.properties?.group_column).toBeUndefined();
+  }, 30000);
+});
+
 describe("the human grabbing the wheel", () => {
   /**
    * Narrowing the sample window must change what the next tool call computes

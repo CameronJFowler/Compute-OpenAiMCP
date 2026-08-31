@@ -39,6 +39,22 @@ FRENCH_FTP = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
 FF_URL = FRENCH_FTP + "F-F_Research_Data_Factors_daily_CSV.zip"
 INDUSTRY_URL = FRENCH_FTP + "49_Industry_Portfolios_daily_CSV.zip"
 
+# Both climate series come from the Datahub mirrors rather than from NOAA and
+# NASA directly. data.giss.nasa.gov answered twice and then began timing out
+# from every client on this network, and a build script for a submission should
+# not depend on a host that behaves like that. The mirrors carry the same
+# figures and are served by GitHub.
+TEMPERATURE_URL = (
+    "https://raw.githubusercontent.com/datasets/global-temp/main/data/annual.csv"
+)
+CO2_URL = (
+    "https://raw.githubusercontent.com/datasets/co2-ppm/main/data/co2-annmean-mlo.csv"
+)
+PENGUINS_URL = (
+    "https://raw.githubusercontent.com/allisonhorst/palmerpenguins/"
+    "main/inst/extdata/penguins.csv"
+)
+
 # French codes both of these as missing.
 MISSING_CODES = (-99.99, -999.0)
 
@@ -50,7 +66,7 @@ def fetch(url, attempts=4, pause=1.5):
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(request, timeout=90) as response:
                 return response.read()
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last = exc
             time.sleep(pause * (attempt + 1))
     raise RuntimeError(f"failed to fetch {url}: {last}")
@@ -180,6 +196,114 @@ def fetch_industries():
     }
 
 
+def fetch_climate():
+    """
+    Annual global temperature anomaly and atmospheric CO2, joined on year.
+
+    Two independent temperature estimates are kept as separate columns rather
+    than averaged. They measure the same quantity by different methods, which
+    makes a paired test between them a real question rather than a contrived
+    one - and the join leaves CO2 missing before 1959, which is an honest
+    demonstration of what the tools do about incomplete overlap.
+    """
+    temp_text = fetch(TEMPERATURE_URL).decode("utf-8", errors="replace")
+    co2_text = fetch(CO2_URL).decode("utf-8", errors="replace")
+
+    # Long format: Source,Year,Mean - one row per source per year.
+    by_year = {}
+    sources = set()
+    for record in csv.DictReader(io.StringIO(temp_text)):
+        try:
+            year = int(record["Year"])
+            mean = float(record["Mean"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        source = (record.get("Source") or "").strip().lower()
+        if not source:
+            continue
+        sources.add(source)
+        by_year.setdefault(year, {})[source] = mean
+
+    co2_by_year = {}
+    for record in csv.DictReader(io.StringIO(co2_text)):
+        try:
+            co2_by_year[int(record["Year"])] = float(record["Mean"])
+        except (TypeError, ValueError, KeyError):
+            continue
+
+    ordered_sources = sorted(sources)
+    years = sorted(set(by_year) | set(co2_by_year))
+
+    rows = []
+    for year in years:
+        temps = by_year.get(year, {})
+        co2 = co2_by_year.get(year)
+        rows.append(
+            [f"{year}-12-31", str(year), "" if co2 is None else f"{co2:.2f}"]
+            + [
+                "" if temps.get(s) is None else f"{temps[s]:.4f}"
+                for s in ordered_sources
+            ]
+        )
+
+    header = ["date", "year", "co2_ppm"] + [f"temp_{s}_c" for s in ordered_sources]
+    path = os.path.join(OUT_DIR, "climate_annual.csv")
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+    missing_co2 = sum(1 for r in rows if r[2] == "")
+    print(
+        f"climate: {len(rows)} years ({years[0]}-{years[-1]}), "
+        f"sources {ordered_sources}, {missing_co2} years without CO2 -> {path}"
+    )
+    return {
+        "rows": len(rows),
+        "first": years[0],
+        "last": years[-1],
+        "sources": ordered_sources,
+        "missing_co2": missing_co2,
+        "columns": header,
+    }
+
+
+def fetch_penguins():
+    """
+    Palmer Archipelago penguins. 344 birds, three species, two categorical
+    groupings and four body measurements. Released CC0.
+
+    The only transformation is turning the literal string NA into an empty cell,
+    so the loader reads it as missing rather than as a category called "NA".
+    """
+    text = fetch(PENGUINS_URL).decode("utf-8", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    fieldnames = reader.fieldnames or []
+
+    rows = []
+    missing_cells = 0
+    for record in reader:
+        row = []
+        for name in fieldnames:
+            value = (record.get(name) or "").strip()
+            if value in ("NA", "N/A", "nan", "."):
+                value = ""
+                missing_cells += 1
+            row.append(value)
+        rows.append(row)
+
+    path = os.path.join(OUT_DIR, "penguins.csv")
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(fieldnames)
+        writer.writerows(rows)
+
+    species = sorted({r[0] for r in rows if r[0]})
+    print(f"penguins: {len(rows)} rows, species {species} -> {path}")
+    return {"rows": len(rows), "species": species, "missing": missing_cells,
+            "columns": fieldnames}
+
+
 def write_hubble():
     """
     Hubble (1929), 'A relation between distance and radial velocity among
@@ -208,7 +332,7 @@ def write_hubble():
     return {"rows": len(rows)}
 
 
-def write_sources(industries, factors, hubble):
+def write_sources(industries, factors, hubble, climate, penguins):
     today = date.today().isoformat()
     path = os.path.join(OUT_DIR, "SOURCES.md")
     with open(path, "w", encoding="utf-8") as fh:
@@ -273,6 +397,51 @@ French. Provided by the Data Library for research use.
   `hypothesis_test` tools that fit a factor model fit `v = H0 * d` here, and
   recover Hubble's original constant of roughly 450 km/s/Mpc - about seven
   times the modern value, because his distance ladder was wrong.
+
+## climate_annual.csv
+
+{climate['rows']} years, {climate['first']} to {climate['last']}.
+Columns: `{', '.join(climate['columns'])}`.
+
+- Temperature: global mean surface temperature anomaly in degrees Celsius, from
+  two independent estimates kept as separate columns
+  ({', '.join(climate['sources'])}). GCAG is NOAA's Global Component of the
+  Climate at a Glance series; GISTEMP is NASA GISS.
+- CO2: annual mean atmospheric carbon dioxide in parts per million, Mauna Loa
+  Observatory, NOAA Global Monitoring Laboratory.
+- Both retrieved from the Datahub mirrors on GitHub
+  (`datasets/global-temp`, `datasets/co2-ppm`) rather than from NOAA and NASA
+  directly. `data.giss.nasa.gov` answered twice and then began timing out from
+  every client on this network, and a build script for a submission should not
+  depend on a host that behaves that way. The mirrors carry the same figures.
+- Underlying data are works of the US federal government and are in the public
+  domain; the Datahub packages carry the Open Data Commons Public Domain
+  Dedication and License (PDDL).
+- **CO2 is missing for {climate['missing_co2']} of the {climate['rows']} years**,
+  because the Mauna Loa record begins in 1959 while the temperature series
+  begins in 1850. That gap is deliberate and left in: a regression of
+  temperature on CO2 drops those rows and reports how many it dropped, which is
+  the behaviour worth showing.
+- The two temperature columns measure the same quantity by different methods,
+  so a paired test between them is a real question rather than a contrived one.
+
+## penguins.csv
+
+{penguins['rows']} birds. Columns: `{', '.join(penguins['columns'])}`.
+Species: {', '.join(penguins['species'])}.
+
+- Source: Horst AM, Hill AP, Gorman KB (2020), *palmerpenguins: Palmer
+  Archipelago (Antarctica) penguin data*. Original data collected by Dr Kristen
+  Gorman at Palmer Station, a member of the Long Term Ecological Research
+  Network. <https://allisonhorst.github.io/palmerpenguins/>
+- Released **CC0** (public domain dedication). No attribution obligation,
+  though the citation above is the courteous thing to carry.
+- The literal string `NA` is rewritten as an empty cell so the loader reads it
+  as missing rather than as a category named "NA". {penguins['missing']} cells
+  were affected.
+- Present because it is the cleanest available test of whether the bench is
+  actually domain-general: three species, two categorical groupings and four
+  body measurements, with no time dimension at all.
 """)
     print(f"sources -> {path}")
 
@@ -283,9 +452,11 @@ def main():
     print(f"started {datetime.now().isoformat(timespec='seconds')}")
 
     hubble = write_hubble()
+    climate = fetch_climate()
+    penguins = fetch_penguins()
     factors = fetch_ff_factors()
     industries = fetch_industries()
-    write_sources(industries, factors, hubble)
+    write_sources(industries, factors, hubble, climate, penguins)
 
     stale = os.path.join(OUT_DIR, "equities_daily.csv")
     if os.path.exists(stale):

@@ -418,12 +418,16 @@ export function runRegressionTool(
 
 // ---------------------------------------------------------------------------
 
-export function hypothesisTestTool(numericColumns: string[]): ToolDescriptor {
+export function hypothesisTestTool(
+  numericColumns: string[],
+  categoryColumns: string[],
+  categoryLabels: string[],
+): ToolDescriptor {
   return defineTool({
     name: "hypothesis_test",
     description:
-      "Runs a named statistical test and states the null hypothesis in words alongside the statistic, degrees of freedom and p-value, with the decision at both the naive threshold and the session-adjusted one. one_sample_t asks whether a column's mean differs from a value. two_sample_t is Welch's test and does not assume equal variances. paired_t tests the mean of the row-by-row difference and needs the two columns aligned. jarque_bera tests normality. Every call adds to the session test counter.",
-    inputSchema: hypothesisTestSchema(numericColumns),
+      "Runs a named statistical test and states the null hypothesis in words alongside the statistic, degrees of freedom and p-value, with the decision at both the naive threshold and the session-adjusted one. one_sample_t asks whether a column's mean differs from a value. two_sample_t is Welch's test and does not assume equal variances: pass group_column with group_a and group_b to split one measurement by a category, which is the usual case, or other_column to compare two different measurements. paired_t tests the mean of the row-by-row difference and needs the two columns aligned on the same rows. jarque_bera tests normality. Every call adds to the session test counter.",
+    inputSchema: hypothesisTestSchema(numericColumns, categoryColumns, categoryLabels),
     annotations: { readOnlyHint: true },
     run: (input, ctx): ToolOutcome => {
       const { frame, failure } = requireFrame();
@@ -490,12 +494,88 @@ export function hypothesisTestTool(numericColumns: string[]): ToolDescriptor {
         nullHypothesis = `H0: the mean of ${columnName} equals ${mu}.`;
         statisticName = "t";
         detail = `mean=${fmt(m, 6)} sd=${fmt(sd, 6)} se=${fmt(se, 6)} n=${values.length}`;
+      } else if (test === "two_sample_t" && readString(input, "group_column")) {
+        // Split one measurement by a categorical column. This is what makes the
+        // tool usable on any dataset with a factor rather than only on datasets
+        // that happen to hold two comparable measurements side by side.
+        const groupName = readString(input, "group_column") as string;
+        const group = frame.columns[groupName];
+
+        if (!group || group.kind !== "category" || !group.labels) {
+          return {
+            ok: false,
+            error: `"${groupName}" is not a categorical column`,
+            hint: "group_column has to be a column of labels, not measurements.",
+            valid: frame.columnOrder.filter((n) => frame.columns[n].kind === "category"),
+          };
+        }
+
+        const labels = group.labels;
+        const available = [...new Set(labels.filter((l) => l !== ""))].sort();
+        const groupA = readString(input, "group_a");
+        const groupB = readString(input, "group_b");
+
+        if (!groupA || !groupB) {
+          return {
+            ok: false,
+            error: "group_a and group_b are both required when group_column is given",
+            hint: `Name the two groups of ${groupName} to compare.`,
+            valid: available,
+          };
+        }
+        if (groupA === groupB) {
+          return {
+            ok: false,
+            error: `group_a and group_b are both "${groupA}"`,
+            hint: "Comparing a group with itself has no null hypothesis. Pick two different groups.",
+            valid: available,
+          };
+        }
+        const unknown = [groupA, groupB].filter((g) => !available.includes(g));
+        if (unknown.length > 0) {
+          return {
+            ok: false,
+            error: `${groupName} has no group called ${unknown.map((u) => `"${u}"`).join(" or ")}`,
+            hint: "Group labels are case sensitive. describe_dataset lists the column.",
+            valid: available,
+          };
+        }
+
+        const sampleA: number[] = [];
+        const sampleB: number[] = [];
+        for (let i = 0; i < frame.nRows; i++) {
+          const value = primary.values[i];
+          if (!Number.isFinite(value)) continue;
+          if (labels[i] === groupA) sampleA.push(value);
+          else if (labels[i] === groupB) sampleB.push(value);
+        }
+
+        if (sampleA.length < 3 || sampleB.length < 3) {
+          return {
+            ok: false,
+            error: `too few complete observations: ${groupA} has ${sampleA.length}, ${groupB} has ${sampleB.length}`,
+            hint: "Each group needs at least 3 rows where the measurement is present.",
+          };
+        }
+
+        const meanA = mean(sampleA);
+        const meanB = mean(sampleB);
+        const varA = standardDeviation(sampleA) ** 2 / sampleA.length;
+        const varB = standardDeviation(sampleB) ** 2 / sampleB.length;
+        statistic = (meanA - meanB) / Math.sqrt(varA + varB);
+        df =
+          (varA + varB) ** 2 /
+          (varA ** 2 / (sampleA.length - 1) + varB ** 2 / (sampleB.length - 1));
+        pValue = studentTTwoSidedP(statistic, df);
+        nullHypothesis = `H0: mean ${columnName} is the same for ${groupA} and ${groupB}.`;
+        statisticName = "t (Welch)";
+        detail = `${groupA}: mean=${fmt(meanA, 4)} n=${sampleA.length} | ${groupB}: mean=${fmt(meanB, 4)} n=${sampleB.length} | difference=${fmt(meanA - meanB, 4)}`;
       } else {
         if (!otherName || !frame.columns[otherName]) {
           return {
             ok: false,
-            error: `${test} needs other_column, and "${otherName}" is not a column`,
-            hint: "Name the second column to compare against.",
+            error: `${test} needs either group_column (to split ${columnName} by a category) or other_column (to compare two measurements), and neither was usable`,
+            hint: "For a group comparison pass group_column, group_a and group_b. For a column comparison pass other_column.",
             valid: frame.columnOrder,
           };
         }

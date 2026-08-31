@@ -66,7 +66,7 @@ export function App() {
         <div className="flex items-baseline gap-2.5 shrink-0">
           <span className="text-[15px] tracking-tight text-ink">{APP_NAME}</span>
           <span className="text-[12px] text-ink3 hidden lg:inline">
-            Quantitative research bench
+            Research bench
           </span>
         </div>
 

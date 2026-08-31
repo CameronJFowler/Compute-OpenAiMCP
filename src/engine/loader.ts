@@ -82,6 +82,46 @@ export function parseFactorJoin(csvText: string): FactorJoin {
   return { names, byDate };
 }
 
+/**
+ * Decide whether a column holds numbers or labels.
+ *
+ * By content, never by position. The cross-section loader used to assume
+ * column zero was the label and everything after it was numeric, which is true
+ * of exactly one dataset. A file with three categorical columns in the middle,
+ * or a numeric identifier first, has to work without a code change.
+ *
+ * The 80% threshold tolerates a few unparseable cells in an otherwise numeric
+ * column without letting a genuinely categorical column through.
+ */
+function inferKind(values: string[]): "numeric" | "category" {
+  let nonEmpty = 0;
+  let numeric = 0;
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed === "") continue;
+    nonEmpty++;
+    if (Number.isFinite(Number(trimmed))) numeric++;
+  }
+  if (nonEmpty === 0) return "category";
+  return numeric / nonEmpty >= 0.8 ? "numeric" : "category";
+}
+
+function noteFor(
+  entry: DatasetManifestEntry,
+  name: string,
+  kind: "numeric" | "category",
+): string {
+  const declared = entry.columnNotes?.[name];
+  if (declared) return declared;
+  const fallback = FACTOR_NOTES[name];
+  if (fallback) return fallback;
+  return kind === "category" ? "Categorical label." : "Numeric measurement.";
+}
+
+function provenance(entry: DatasetManifestEntry): string {
+  return `${entry.name}. See public/data/SOURCES.md for provenance and licence.`;
+}
+
 const FACTOR_NOTES: Record<string, string> = {
   mkt_rf: "Market return in excess of the risk-free rate (Fama-French). Same for every entity on a date.",
   smb: "Small minus big, the size factor (Fama-French). Same for every entity on a date.",
@@ -157,11 +197,7 @@ function buildWidePanel(
         const row = factors.byDate.get(dates[i]);
         values[i] = row ? row[f] : NaN;
       }
-      columns[name] = makeColumn(
-        name,
-        values,
-        FACTOR_NOTES[name] ?? "Fama-French daily factor, joined on date.",
-      );
+      columns[name] = makeColumn(name, values, noteFor(entry, name, "numeric"));
       columnOrder.push(name);
     }
   }
@@ -175,7 +211,7 @@ function buildWidePanel(
     entities,
     columnOrder,
     columns,
-    source: "Kenneth R. French Data Library. See public/data/SOURCES.md.",
+    source: provenance(entry),
   };
 }
 
@@ -192,10 +228,11 @@ function buildSeries(entry: DatasetManifestEntry, csvText: string): Frame {
   const dates = dataRows.map((r) => r[0].trim());
   const columns: Record<string, Column> = {};
   for (let j = 0; j < names.length; j++) {
-    columns[names[j]] = makeColumn(
-      names[j],
+    const name = names[j];
+    columns[name] = makeColumn(
+      name,
       dataRows.map((r) => toNumber(r[j + 1])),
-      FACTOR_NOTES[names[j]] ?? "Daily series, decimal.",
+      noteFor(entry, name, "numeric"),
     );
   }
 
@@ -208,7 +245,7 @@ function buildSeries(entry: DatasetManifestEntry, csvText: string): Frame {
     entities: null,
     columnOrder: names,
     columns,
-    source: "Kenneth R. French Data Library. See public/data/SOURCES.md.",
+    source: provenance(entry),
   };
 }
 
@@ -228,31 +265,37 @@ function buildCrossSection(entry: DatasetManifestEntry, csvText: string): Frame 
 
   const columns: Record<string, Column> = {};
   const columnOrder: string[] = [];
+  let labelColumn: string | null = null;
 
-  // Column 0 is the label.
-  columns[header[0]] = {
-    name: header[0],
-    kind: "category",
-    values: dataRows.map(() => NaN),
-    labels: dataRows.map((r) => r[0].trim()),
-    derived: false,
-    forwardLooking: false,
-    note: "Object identifier.",
-  };
-  columnOrder.push(header[0]);
+  for (let j = 0; j < header.length; j++) {
+    const name = header[j];
+    const raw = dataRows.map((r) => r[j].trim());
+    const kind = inferKind(raw);
+    const note = noteFor(entry, name, kind);
 
-  for (let j = 1; j < header.length; j++) {
-    columns[header[j]] = makeColumn(
-      header[j],
-      dataRows.map((r) => toNumber(r[j])),
-      header[j] === "distance_mpc"
-        ? "Distance in megaparsecs, from Hubble's own calibration."
-        : header[j] === "velocity_km_s"
-          ? "Radial velocity in km/s, positive meaning recession."
-          : "Numeric measurement.",
-    );
-    columnOrder.push(header[j]);
+    if (kind === "category") {
+      columns[name] = {
+        name,
+        kind: "category",
+        values: raw.map(() => NaN),
+        labels: raw,
+        derived: false,
+        forwardLooking: false,
+        note,
+      };
+      // The first categorical column names the rows. For Hubble that is a
+      // unique object name; for a dataset grouped by species it repeats, which
+      // is exactly what makes group comparisons possible.
+      if (!labelColumn) labelColumn = name;
+    } else {
+      columns[name] = makeColumn(name, raw.map(toNumber), note);
+    }
+    columnOrder.push(name);
   }
+
+  const entities = labelColumn
+    ? (columns[labelColumn].labels as string[])
+    : dataRows.map((_, i) => `row_${i + 1}`);
 
   return {
     id: entry.id,
@@ -260,10 +303,10 @@ function buildCrossSection(entry: DatasetManifestEntry, csvText: string): Frame 
     domain: entry.domain,
     nRows: dataRows.length,
     dates: null,
-    entities: dataRows.map((r) => r[0].trim()),
+    entities,
     columnOrder,
     columns,
-    source: "Hubble (1929) PNAS 15(3):168-173, Table 1. See public/data/SOURCES.md.",
+    source: provenance(entry),
   };
 }
 

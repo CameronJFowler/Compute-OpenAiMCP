@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { ChartConfiguration } from "chart.js";
 
-import { DATASETS } from "../config";
+import { DATASETS, datasetDomains } from "../config";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
 import { ApprovalCard } from "./ApprovalCard";
 import {
@@ -100,24 +100,34 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center py-12">
-      <div className="max-w-xl">
+      <div className="max-w-2xl">
         <h1 className="text-[19px] text-ink mb-3 tracking-tight">
           A research bench you and an agent operate together.
         </h1>
-        <p className="text-[13px] text-ink2 leading-relaxed mb-7">
-          Regressions with autocorrelation-consistent standard errors, a
-          look-ahead-free cross-sectional backtester, and a block bootstrap — all
-          computed in this page, with nothing sent anywhere. The session counts every
-          hypothesis tested and adjusts the significance threshold as it goes.
+        <p className="text-[13px] text-ink2 leading-relaxed mb-7 max-w-xl">
+          Regression with autocorrelation-consistent standard errors, group
+          comparisons, correlation, resampling — computed in this page, with nothing
+          sent anywhere. The same tools work on whatever is loaded, and the session
+          counts every hypothesis tested and tightens the significance threshold as it
+          goes.
         </p>
 
-        <div className="label mb-2.5">Bundled data</div>
-        <ul className="space-y-2.5 mb-7">
+        <div className="flex items-baseline gap-3 mb-3">
+          <span className="label">Bundled data</span>
+          <span className="text-[11.5px] text-ink3">
+            {datasetDomains().join(" · ")}
+          </span>
+        </div>
+
+        <ul className="space-y-3 mb-7">
           {DATASETS.map((d) => (
             <li key={d.id} className="flex gap-3">
               <span className="w-1 h-1 rounded-full bg-ink3 mt-2 shrink-0" />
-              <div>
-                <div className="text-[12.5px] text-ink">{d.name}</div>
+              <div className="min-w-0">
+                <div className="text-[12.5px] text-ink">
+                  {d.name}
+                  <span className="text-ink3 ml-2 text-[11px]">{d.domain}</span>
+                </div>
                 <div className="text-[11.5px] text-ink3 leading-relaxed">
                   {d.description.split(".")[0]}.
                 </div>
@@ -128,11 +138,15 @@ function EmptyState() {
 
         <div className="border-t border-hair pt-5">
           <p className="text-[12.5px] text-ink2 leading-relaxed">
-            Open this page in ChatGPT, or in Chrome with WebMCP enabled, and ask it to
-            get started — for example:{" "}
+            Open this page in ChatGPT, or in Chrome with WebMCP enabled, and ask it
+            something — for example{" "}
             <span className="text-ink">
-              &ldquo;Is there any momentum effect in US industry returns, and does it
-              survive out of sample?&rdquo;
+              &ldquo;Do Adelie and Gentoo penguins differ in body mass?&rdquo;
+            </span>{" "}
+            or{" "}
+            <span className="text-ink">
+              &ldquo;Is there a momentum effect in industry returns that survives out
+              of sample?&rdquo;
             </span>
           </p>
         </div>

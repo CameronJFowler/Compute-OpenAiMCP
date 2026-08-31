@@ -14,6 +14,8 @@
  */
 
 import {
+  categoryColumnNames,
+  categoryValues,
   dependentCandidates,
   regressorCandidateNames,
   signalColumnNames,
@@ -53,6 +55,7 @@ export function buildToolSet(): ToolDescriptor[] {
   const numeric = allColumns.filter((n) => frame?.columns[n].kind === "numeric");
   const dependents = dependentCandidates();
   const regressors = regressorCandidateNames();
+  const categories = categoryColumnNames();
 
   tools.push(
     describeDatasetTool(allColumns),
@@ -60,7 +63,15 @@ export function buildToolSet(): ToolDescriptor[] {
     summaryStatsTool(numeric),
     correlateTool(numeric),
     runRegressionTool(dependents, regressors),
-    hypothesisTestTool(numeric),
+    hypothesisTestTool(
+      numeric,
+      categories,
+      // Every label across every categorical column. Keeping one flat enum is
+      // the honest trade: JSON Schema cannot express "group_a must come from
+      // whichever column group_column names", so the tool validates that pair
+      // at execution time and returns the legal values when it does not hold.
+      [...new Set(categories.flatMap(categoryValues))].sort(),
+    ),
     recordFindingTool(),
     buildReportTool(),
   );

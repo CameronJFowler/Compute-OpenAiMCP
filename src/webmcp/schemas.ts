@@ -163,26 +163,44 @@ export function runRegressionSchema(
   };
 }
 
-export function hypothesisTestSchema(numericColumns: string[]): JsonSchema {
-  return {
-    type: "object",
-    properties: {
-      test: enumOf(
-        ["one_sample_t", "two_sample_t", "paired_t", "jarque_bera"],
-        "one_sample_t: is the mean of a column different from a value. two_sample_t: do two columns have different means (Welch, unequal variances). paired_t: is the mean difference between two aligned columns zero. jarque_bera: is a column normally distributed.",
-      ),
-      column: enumOf(numericColumns, "The column under test."),
-      other_column: enumOf(
-        numericColumns,
-        "The second column, for two_sample_t and paired_t.",
-      ),
-      mu: {
-        type: "number",
-        description: "Null-hypothesis mean for one_sample_t. Defaults to 0.",
-      },
+export function hypothesisTestSchema(
+  numericColumns: string[],
+  categoryColumns: string[],
+  categoryLabels: string[],
+): JsonSchema {
+  const properties: Record<string, unknown> = {
+    test: enumOf(
+      ["one_sample_t", "two_sample_t", "paired_t", "jarque_bera"],
+      "one_sample_t: is the mean of a column different from a value. two_sample_t: do two groups or two columns have different means (Welch, unequal variances). paired_t: is the mean difference between two aligned columns zero. jarque_bera: is a column normally distributed.",
+    ),
+    column: enumOf(numericColumns, "The measurement under test."),
+    other_column: enumOf(
+      numericColumns,
+      "The second column. Use for paired_t, or for a two_sample_t that compares two different measurements rather than two groups.",
+    ),
+    mu: {
+      type: "number",
+      description: "Null-hypothesis mean for one_sample_t. Defaults to 0.",
     },
-    required: ["test", "column"],
   };
+
+  // Only offered when the loaded dataset actually has something to group by.
+  if (categoryColumns.length > 0) {
+    properties.group_column = enumOf(
+      categoryColumns,
+      "Split `column` by this categorical column instead of comparing two numeric columns. This is the usual way to run a two_sample_t.",
+    );
+    properties.group_a = enumOf(
+      categoryLabels,
+      "The first group, a value from group_column.",
+    );
+    properties.group_b = enumOf(
+      categoryLabels,
+      "The second group, a value from group_column.",
+    );
+  }
+
+  return { type: "object", properties, required: ["test", "column"] };
 }
 
 export function runBacktestSchema(signalColumns: string[]): JsonSchema {

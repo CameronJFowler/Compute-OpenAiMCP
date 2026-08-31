@@ -1,8 +1,10 @@
 # Compute
 
-**A quantitative research bench that a human and an agent operate together — and that keeps score of how many hypotheses have been tested.**
+**A research bench that a human and an agent operate together — and that keeps score of how many hypotheses have been tested.**
 
-Compute is a static page with no backend. All computation — OLS with HAC standard errors, a look-ahead-free cross-sectional backtester, a stationary block bootstrap — runs in the browser in TypeScript. It exposes itself to an agent through [WebMCP](https://github.com/webmachinelearning/webmcp), and the whole design turns on one thing that only an in-page tool can do.
+Compute is a static page with no backend. Regression with autocorrelation-consistent standard errors, group comparisons, correlation, resampling and a look-ahead-free backtester all run in the browser in TypeScript. It exposes itself to an agent through [WebMCP](https://github.com/webmachinelearning/webmcp), and the whole design turns on one thing that only an in-page tool can do.
+
+The same tools work across five bundled datasets in four fields — climate, biology, astronomy and finance. Nothing in the tool layer knows which one is loaded: the schemas are rebuilt from whatever the page is holding, so `hypothesis_test` offers to split penguins by species and doesn't offer to split a temperature series by anything, because there is nothing there to split by.
 
 ---
 
@@ -74,7 +76,7 @@ npm run dev
 Then open http://localhost:5180. Add `?dev=1` for the dev console, which lists every currently registered tool with its schema and lets you execute it with JSON arguments — no agent required. The tool list in that console rebuilds itself as the workspace changes, which is the most direct way to see the reactive registry working.
 
 ```bash
-npm test          # 160 tests
+npm test          # 166 tests
 npm run build     # typecheck + production build
 ```
 
@@ -157,7 +159,7 @@ src/
 
 ## The statistics are tested, not asserted
 
-`npm test` runs 160 tests. The numerical ones are checked against fixtures generated offline by SciPy and NumPy ([`scripts/make_fixtures.py`](scripts/make_fixtures.py)) and committed as JSON — nothing here is a value the implementation produced and was then blessed.
+`npm test` runs 166 tests. The numerical ones are checked against fixtures generated offline by SciPy and NumPy ([`scripts/make_fixtures.py`](scripts/make_fixtures.py)) and committed as JSON — nothing here is a value the implementation produced and was then blessed.
 
 - **Distributions** match `scipy.stats` to 1e-11 relative. The t, F and χ² CDFs are built on a Lentz continued fraction for the regularized incomplete beta and a series/continued-fraction incomplete gamma.
 - **OLS coefficients** are checked against `numpy.linalg.lstsq` (LAPACK SVD) — a genuinely different algorithm from the Householder QR under test. Standard errors, R², and the F statistics are checked against a NumPy reference implementation of the same estimators.
@@ -170,7 +172,7 @@ src/
 ### Declared deviations from the brief
 
 - **Fourteen tools, not eleven.** The brief says eleven and then enumerates fourteen. Fourteen is what ships.
-- **`hypothesis_test` offers four tests, not five.** `f_test_joint` is absent because `run_regression` already returns the joint F on every call — with a HAC Wald statistic when Newey-West errors are selected, since the R²-based form is not valid there. A second entry point to the same test would be a way to run it without the multiple-testing counter noticing.
+- **`hypothesis_test` offers four tests, not five**, but `two_sample_t` gained `group_column` / `group_a` / `group_b`, which the brief did not specify and which is what makes the tool work on any dataset with a factor. `f_test_joint` is absent because `run_regression` already returns the joint F on every call — with a HAC Wald statistic when Newey-West errors are selected, since the R²-based form is not valid there. A second entry point to the same test would be a way to run it without the multiple-testing counter noticing.
 - **The equity panel is 49 industry portfolios, not 50 individual tickers.** Stooq now serves a bot-verification interstitial instead of CSV. See `SOURCES.md`.
 - **No Web Worker.** The bootstrap chunks on the main thread and yields between batches, which keeps the progress bar and the approval card responsive without a message protocol.
 
@@ -188,17 +190,23 @@ The spec moved twice in 2026 and much of the secondary documentation is stale. P
 
 ## Data
 
-Three datasets, bundled and committed. No API key, no rate limit, nothing that can go down. Full provenance in [`public/data/SOURCES.md`](public/data/SOURCES.md).
+Five datasets across four fields, bundled and committed — 1.5 MB total. No API key, no rate limit, nothing that can go down mid-judging. Full provenance and licence position in [`public/data/SOURCES.md`](public/data/SOURCES.md).
 
-| File | What | Source |
-|---|---|---|
-| `industries_daily.csv` | 49 US industry portfolios, daily value-weighted returns, 2015–2025 (2,766 days × 49 = 135,534 rows) | Kenneth R. French Data Library |
-| `ff_factors_daily.csv` | Fama-French 3 factors + RF, daily | Kenneth R. French Data Library |
-| `hubble_1929.csv` | 24 galaxies: distance (Mpc), radial velocity (km/s) | Hubble (1929), *PNAS* 15(3):168–173, Table 1 |
+| File | Field | What | Source |
+|---|---|---|---|
+| `climate_annual.csv` | climate | Global temperature anomaly from two independent estimates, plus Mauna Loa CO₂, annual 1850–2026 | NOAA GCAG, NASA GISTEMP, NOAA GML (public domain) |
+| `penguins.csv` | biology | 344 penguins, three species, four body measurements and three categorical groupings | Horst, Hill & Gorman (2020), CC0 |
+| `hubble_1929.csv` | astronomy | 24 galaxies: distance (Mpc), radial velocity (km/s) | Hubble (1929), *PNAS* 15(3):168–173, Table 1 |
+| `industries_daily.csv` | finance | 49 US industry portfolios, daily returns, 2015–2025 (135,534 rows) | Kenneth R. French Data Library |
+| `ff_factors_daily.csv` | finance | Fama-French 3 factors + RF, daily | Kenneth R. French Data Library |
+
+Three of these exist to prove the bench is not domain software wearing a general coat:
+
+- **Penguins** is a plain cross-section with no time dimension at all. It is what forces `hypothesis_test` to take `group_column` / `group_a` / `group_b` and split one measurement by a factor, rather than only comparing two columns that happen to sit side by side. The categorical columns are detected by content, not by position.
+- **Climate** joins two records that only partly overlap: CO₂ begins in 1959, temperature in 1850. A regression across them drops the non-overlapping years and reports how many, which is the honest behaviour worth showing. The two temperature estimates measure the same quantity by different methods, so a paired test between them is a real question.
+- **Hubble** is the oldest generality check. The *same* `run_regression` fits `v = H₀·d` and recovers Hubble's original constant of about 450 km/s/Mpc — roughly seven times the modern value, because his distance ladder was wrong.
 
 The factor file is joined onto the industry panel by date at load time, so a market-beta control is available without the agent aligning a second dataset by hand.
-
-Hubble is the generality demo. The *same* `run_regression` fits `v = H₀·d` and recovers Hubble's original constant of about 450 km/s/Mpc — roughly seven times the modern value, because his distance ladder was wrong. The bench is the product; finance is the demo.
 
 Regenerate with `python scripts/fetch_data.py`.
 
