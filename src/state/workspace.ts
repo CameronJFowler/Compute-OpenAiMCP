@@ -159,13 +159,9 @@ interface WorkspaceState {
   progress: { label: string; value: number } | null;
 
   // ---- actions -----------------------------------------------------------
-  /** Open state of the "connect an agent" guidance. */
-  connectPanelOpen: boolean;
-
   loadFrame: (frame: Frame, datasetId: string, datasetName: string) => void;
   setSampleWindow: (start: string | null, end: string | null, author?: Author) => void;
   setHypothesis: (text: string, author?: Author) => void;
-  setConnectPanelOpen: (open: boolean) => void;
   addColumn: (column: Column) => void;
   recordTest: (label: string, pValue: number, step: number) => void;
   beginStep: (tool: string, args: Record<string, unknown>, actor: "agent" | "human") => number;
@@ -207,7 +203,6 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
   report: null,
   hypothesisAuthor: null,
   windowAuthor: null,
-  connectPanelOpen: false,
 
   alpha: DEFAULT_ALPHA,
   tests: [],
@@ -239,8 +234,6 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
 
   setHypothesis: (text, author = "human") =>
     set({ hypothesis: text, hypothesisAuthor: author }),
-
-  setConnectPanelOpen: (open) => set({ connectPanelOpen: open }),
 
   addColumn: (column) => {
     const frame = get().frame;

@@ -2,6 +2,9 @@
 
 **A research bench where you can check the agent's work.**
 
+For setup, deployment, agent connection, and demo guidance, see the
+[operator guide](docs/OPERATOR-GUIDE.md).
+
 An agent can already run your analysis in seconds. The problem is that you cannot check it. The numbers arrive with no record of how they were produced, no account of how many things were tried before one of them worked, and no way to reproduce any of it. That is true today, for anyone who has let a model loose on a spreadsheet, and it gets worse as the models get faster.
 
 Compute fixes that by construction rather than by discipline:

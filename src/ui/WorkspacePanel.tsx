@@ -4,7 +4,6 @@ import type { ChartConfiguration } from "chart.js";
 import { DATASETS, datasetDomains } from "../config";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
 import { ApprovalCard } from "./ApprovalCard";
-import { ConnectAgent } from "./ConnectAgent";
 import {
   BASE_PLUGINS,
   CHART_COLORS,
@@ -92,32 +91,16 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 }
 
 /**
- * What an operator sees before anything has been loaded.
- *
- * It has to answer, in about five seconds, what this is and how to start it -
- * for someone who has never seen it and may be one of three hundred entries
- * being skimmed.
+ * The calm starting point before data is loaded.
  */
 function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center py-12">
-      <div className="max-w-2xl">
-        <h1 className="text-[19px] text-ink mb-3 tracking-tight">
-          An agent can already run the analysis. Checking it is the hard part.
-        </h1>
-        <p className="text-[13px] text-ink2 leading-relaxed mb-6 max-w-xl">
-          Numbers come back from an agent with no record of how they were produced, no
-          account of how many things were tried before one worked, and no way to
-          reproduce them. Compute is a bench where that is fixed by construction: a
-          finding has to cite the step that produced it, the significance threshold
-          tightens as the session tests more hypotheses, and every call is on the
-          record.
-        </p>
-        <p className="text-[12.5px] text-ink3 leading-relaxed mb-7 max-w-xl">
-          Regression with autocorrelation-consistent standard errors, group
-          comparisons, correlation, resampling and a look-ahead-free backtester — all
-          computed in this page, with nothing sent anywhere.
-        </p>
+      <div className="max-w-2xl w-full">
+        <div className="mb-8">
+          <div className="label mb-2">Research workspace</div>
+          <h1 className="text-[22px] text-ink tracking-tight">Choose a dataset to begin.</h1>
+        </div>
 
         <div className="flex items-baseline gap-3 mb-3">
           <span className="label">Bundled data</span>
@@ -126,10 +109,9 @@ function EmptyState() {
           </span>
         </div>
 
-        <ul className="space-y-3 mb-7">
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
           {DATASETS.map((d) => (
-            <li key={d.id} className="flex gap-3">
-              <span className="w-1 h-1 rounded-full bg-ink3 mt-2 shrink-0" />
+            <li key={d.id} className="border border-hair rounded-md bg-panel px-3.5 py-3">
               <div className="min-w-0">
                 <div className="text-[12.5px] text-ink">
                   {d.name}
@@ -142,8 +124,6 @@ function EmptyState() {
             </li>
           ))}
         </ul>
-
-        <ConnectAgent />
       </div>
     </div>
   );
@@ -570,19 +550,10 @@ export function WorkspacePanel() {
   const view = useWorkspace((s) => s.view);
   const progress = useWorkspace((s) => s.progress);
   const stepCount = useWorkspace((s) => s.steps.length);
-  const connectOpen = useWorkspace((s) => s.connectPanelOpen);
 
   return (
     <div className="h-full overflow-y-auto px-6 py-5">
       <ApprovalCard />
-
-      {/* Toggled from the header chip. The empty state carries its own copy,
-          so this is for reopening it once data is loaded. */}
-      {connectOpen && view.kind !== "empty" && (
-        <div className="mb-5 max-w-2xl">
-          <ConnectAgent />
-        </div>
-      )}
 
       {progress && (
         <div className="mb-5 max-w-md">
