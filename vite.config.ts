@@ -8,6 +8,11 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root: here,
+  // "/" for Netlify, Vercel, Cloudflare and localhost, where the app owns the
+  // domain root. A GitHub Pages project site serves from /<repo>/, so the
+  // deploy workflow sets DEPLOY_BASE and the data paths follow it via
+  // import.meta.env.BASE_URL.
+  base: process.env.DEPLOY_BASE || "/",
   plugins: [react()],
   resolve: {
     // The dev server is sometimes started from the repository root rather than

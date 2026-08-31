@@ -88,6 +88,23 @@ npm test          # 166 tests
 npm run build     # typecheck + production build
 ```
 
+## Deploying
+
+The app is a static bundle with no backend, so anything that serves files works. It is deliberately not tied to one host.
+
+**GitHub Pages** — no account beyond the one hosting this repo. [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) typechecks, runs the tests and publishes on every push to `main`. Enable it once under **Settings → Pages → Source: GitHub Actions**.
+
+**Netlify, Vercel, Cloudflare Pages** — connect the repo and accept the detected settings. [`netlify.toml`](netlify.toml) is already correct (`npm run build`, publish `dist`).
+
+The one thing that differs between them is the path the app is served from. A project site lives at `/<repo>/` rather than at the domain root, which breaks root-relative data paths. `vite.config.ts` reads `DEPLOY_BASE`, and [`assetUrl`](src/engine/loader.ts) resolves every bundled CSV against `import.meta.env.BASE_URL`, so both layouts work:
+
+```bash
+npm run build                              # served from /
+DEPLOY_BASE=/Compute-OpenAiMCP/ npm run build   # served from /Compute-OpenAiMCP/
+```
+
+Verified under both.
+
 ## Connecting an agent
 
 WebMCP needs a browser that implements it and a secure context (`localhost` counts, and so does any HTTPS deployment).

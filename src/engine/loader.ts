@@ -10,6 +10,22 @@
 import type { DatasetManifestEntry } from "../config";
 import { makeColumn, type Column, type Frame } from "./frame";
 
+/**
+ * Resolve a bundled data path against the deployment base.
+ *
+ * The manifest holds root-relative paths like `/data/x.csv`, which are correct
+ * at a domain root and a 404 anywhere else. A GitHub Pages project site serves
+ * from `/Compute-OpenAiMCP/`, and `fetch("/data/x.csv")` there asks the domain
+ * root, not the app. Vite exposes the configured base as
+ * `import.meta.env.BASE_URL`, so honouring it is what makes the app deployable
+ * somewhere other than the root of its own domain.
+ */
+export function assetUrl(file: string): string {
+  const base =
+    (import.meta.env?.BASE_URL as string | undefined) ?? "/";
+  return `${base.replace(/\/+$/, "")}/${file.replace(/^\/+/, "")}`;
+}
+
 /** Minimal RFC-4180-ish parser. Handles quoted fields; our files do not use them. */
 export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -327,7 +343,7 @@ export function buildFrame(
 
 /** Fetch and build. The only network the app does, and it is same-origin. */
 export async function loadDataset(entry: DatasetManifestEntry): Promise<Frame> {
-  const response = await fetch(entry.file);
+  const response = await fetch(assetUrl(entry.file));
   if (!response.ok) {
     throw new Error(`could not load ${entry.file}: HTTP ${response.status}`);
   }
@@ -338,7 +354,7 @@ export async function loadDataset(entry: DatasetManifestEntry): Promise<Frame> {
     // The factor join is what makes a market-beta control available without
     // the agent having to load and align a second dataset by hand.
     try {
-      const factorResponse = await fetch("/data/ff_factors_daily.csv");
+      const factorResponse = await fetch(assetUrl("/data/ff_factors_daily.csv"));
       if (factorResponse.ok) {
         factors = parseFactorJoin(await factorResponse.text());
       }
