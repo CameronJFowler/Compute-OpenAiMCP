@@ -37,7 +37,7 @@ export function setHypothesisTool(): ToolDescriptor {
         };
       }
       const previous = useWorkspace.getState().hypothesis;
-      useWorkspace.getState().setHypothesis(hypothesis);
+      useWorkspace.getState().setHypothesis(hypothesis, "agent");
 
       return {
         ok: true,

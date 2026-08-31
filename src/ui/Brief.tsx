@@ -22,6 +22,25 @@ function Section({
   );
 }
 
+/**
+ * Who last wrote this field.
+ *
+ * Both parties write to the same hypothesis and the same window. Saying which
+ * one did it last is what turns a shared object into visible turn-taking.
+ */
+function Author({ author }: { author: "agent" | "human" | null }) {
+  if (!author) return null;
+  return (
+    <span className="text-2xs uppercase tracking-label text-ink3">
+      {author === "agent" ? (
+        <span className="text-accent">set by agent</span>
+      ) : (
+        "edited by you"
+      )}
+    </span>
+  );
+}
+
 function Row({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="flex items-baseline justify-between py-[3px]">
@@ -52,6 +71,8 @@ export function Brief() {
   const setSampleWindow = useWorkspace((s) => s.setSampleWindow);
   const findings = useWorkspace((s) => s.findings);
   const tests = useWorkspace((s) => s.tests);
+  const hypothesisAuthor = useWorkspace((s) => s.hypothesisAuthor);
+  const windowAuthor = useWorkspace((s) => s.windowAuthor);
 
   // Local mirror so typing stays responsive; pushed to the store on each keystroke.
   const [draft, setDraft] = useState(hypothesis);
@@ -66,7 +87,10 @@ export function Brief() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <Section title="Question">
+      <Section
+        title="Question"
+        accessory={<Author author={hypothesisAuthor} />}
+      >
         <textarea
           value={draft}
           onChange={(e) => {
@@ -101,13 +125,7 @@ export function Brief() {
       {dataStart && dataEnd && (
         <Section
           title="Sample window"
-          accessory={
-            narrowed ? (
-              <span className="text-2xs text-accent tracking-label uppercase">
-                narrowed
-              </span>
-            ) : undefined
-          }
+          accessory={narrowed ? <Author author={windowAuthor} /> : undefined}
         >
           <div className="flex items-center gap-2 mb-2">
             <input

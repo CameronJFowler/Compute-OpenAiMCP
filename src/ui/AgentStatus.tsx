@@ -27,14 +27,19 @@ export function AgentStatus() {
   }, [tools.length]);
 
   const connected = status.kind === "ready";
+  const panelOpen = useWorkspace((s) => s.connectPanelOpen);
+  const setPanelOpen = useWorkspace((s) => s.setConnectPanelOpen);
 
   return (
-    <div
-      className="flex items-center gap-2.5 px-3 h-7 rounded border border-hair bg-panel"
+    <button
+      onClick={() => setPanelOpen(!panelOpen)}
+      className={`flex items-center gap-2.5 px-3 h-7 rounded border bg-panel transition-colors ${
+        panelOpen ? "border-hair2" : "border-hair hover:border-hair2"
+      }`}
       title={
         connected
           ? `Connected through ${status.entryPoint}.modelContext. The agent can call ${tools.length} tools right now.`
-          : "No agent is attached. Open this page in ChatGPT, or in Chrome with WebMCP enabled."
+          : "No agent attached. Click for how to connect one."
       }
     >
       <span
@@ -57,6 +62,6 @@ export function AgentStatus() {
       <span className="text-[12px] text-ink3">
         {tools.length === 1 ? "capability" : "capabilities"}
       </span>
-    </div>
+    </button>
   );
 }

@@ -2,7 +2,7 @@
 export const APP_NAME = "Compute";
 
 export const APP_TAGLINE =
-  "A research bench that a human and an agent operate together.";
+  "A research bench where you can check the agent's work.";
 
 /** Significance level before any session adjustment. */
 export const DEFAULT_ALPHA = 0.05;

@@ -4,6 +4,7 @@ import type { ChartConfiguration } from "chart.js";
 import { DATASETS, datasetDomains } from "../config";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
 import { ApprovalCard } from "./ApprovalCard";
+import { ConnectAgent } from "./ConnectAgent";
 import {
   BASE_PLUGINS,
   CHART_COLORS,
@@ -102,14 +103,20 @@ function EmptyState() {
     <div className="h-full flex items-center justify-center py-12">
       <div className="max-w-2xl">
         <h1 className="text-[19px] text-ink mb-3 tracking-tight">
-          A research bench you and an agent operate together.
+          An agent can already run the analysis. Checking it is the hard part.
         </h1>
-        <p className="text-[13px] text-ink2 leading-relaxed mb-7 max-w-xl">
+        <p className="text-[13px] text-ink2 leading-relaxed mb-6 max-w-xl">
+          Numbers come back from an agent with no record of how they were produced, no
+          account of how many things were tried before one worked, and no way to
+          reproduce them. Compute is a bench where that is fixed by construction: a
+          finding has to cite the step that produced it, the significance threshold
+          tightens as the session tests more hypotheses, and every call is on the
+          record.
+        </p>
+        <p className="text-[12.5px] text-ink3 leading-relaxed mb-7 max-w-xl">
           Regression with autocorrelation-consistent standard errors, group
-          comparisons, correlation, resampling — computed in this page, with nothing
-          sent anywhere. The same tools work on whatever is loaded, and the session
-          counts every hypothesis tested and tightens the significance threshold as it
-          goes.
+          comparisons, correlation, resampling and a look-ahead-free backtester — all
+          computed in this page, with nothing sent anywhere.
         </p>
 
         <div className="flex items-baseline gap-3 mb-3">
@@ -136,20 +143,7 @@ function EmptyState() {
           ))}
         </ul>
 
-        <div className="border-t border-hair pt-5">
-          <p className="text-[12.5px] text-ink2 leading-relaxed">
-            Open this page in ChatGPT, or in Chrome with WebMCP enabled, and ask it
-            something — for example{" "}
-            <span className="text-ink">
-              &ldquo;Do Adelie and Gentoo penguins differ in body mass?&rdquo;
-            </span>{" "}
-            or{" "}
-            <span className="text-ink">
-              &ldquo;Is there a momentum effect in industry returns that survives out
-              of sample?&rdquo;
-            </span>
-          </p>
-        </div>
+        <ConnectAgent />
       </div>
     </div>
   );
@@ -576,10 +570,19 @@ export function WorkspacePanel() {
   const view = useWorkspace((s) => s.view);
   const progress = useWorkspace((s) => s.progress);
   const stepCount = useWorkspace((s) => s.steps.length);
+  const connectOpen = useWorkspace((s) => s.connectPanelOpen);
 
   return (
     <div className="h-full overflow-y-auto px-6 py-5">
       <ApprovalCard />
+
+      {/* Toggled from the header chip. The empty state carries its own copy,
+          so this is for reopening it once data is loaded. */}
+      {connectOpen && view.kind !== "empty" && (
+        <div className="mb-5 max-w-2xl">
+          <ConnectAgent />
+        </div>
+      )}
 
       {progress && (
         <div className="mb-5 max-w-md">

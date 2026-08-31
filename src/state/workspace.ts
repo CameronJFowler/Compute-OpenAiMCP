@@ -106,6 +106,8 @@ export type WebmcpStatus =
   | { kind: "unavailable"; reason: string }
   | { kind: "ready"; entryPoint: "document" | "navigator" };
 
+export type Author = "agent" | "human";
+
 interface WorkspaceState {
   // ---- dataset -----------------------------------------------------------
   datasetId: string | null;
@@ -123,6 +125,17 @@ interface WorkspaceState {
   hypothesis: string;
   findings: Finding[];
   report: string | null;
+
+  /**
+   * Who last touched the shared fields.
+   *
+   * Both parties write to the same hypothesis and the same sample window, and
+   * the interesting thing is not that they can but that they take turns. An
+   * agent proposing a question and a human sharpening it is the collaboration,
+   * and it is invisible unless the page says who wrote what.
+   */
+  hypothesisAuthor: Author | null;
+  windowAuthor: Author | null;
 
   // ---- multiple testing --------------------------------------------------
   alpha: number;
@@ -146,9 +159,13 @@ interface WorkspaceState {
   progress: { label: string; value: number } | null;
 
   // ---- actions -----------------------------------------------------------
+  /** Open state of the "connect an agent" guidance. */
+  connectPanelOpen: boolean;
+
   loadFrame: (frame: Frame, datasetId: string, datasetName: string) => void;
-  setSampleWindow: (start: string | null, end: string | null) => void;
-  setHypothesis: (text: string) => void;
+  setSampleWindow: (start: string | null, end: string | null, author?: Author) => void;
+  setHypothesis: (text: string, author?: Author) => void;
+  setConnectPanelOpen: (open: boolean) => void;
   addColumn: (column: Column) => void;
   recordTest: (label: string, pValue: number, step: number) => void;
   beginStep: (tool: string, args: Record<string, unknown>, actor: "agent" | "human") => number;
@@ -188,6 +205,9 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
   hypothesis: "",
   findings: [],
   report: null,
+  hypothesisAuthor: null,
+  windowAuthor: null,
+  connectPanelOpen: false,
 
   alpha: DEFAULT_ALPHA,
   tests: [],
@@ -214,9 +234,13 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
     });
   },
 
-  setSampleWindow: (start, end) => set({ sampleStart: start, sampleEnd: end }),
+  setSampleWindow: (start, end, author = "human") =>
+    set({ sampleStart: start, sampleEnd: end, windowAuthor: author }),
 
-  setHypothesis: (text) => set({ hypothesis: text }),
+  setHypothesis: (text, author = "human") =>
+    set({ hypothesis: text, hypothesisAuthor: author }),
+
+  setConnectPanelOpen: (open) => set({ connectPanelOpen: open }),
 
   addColumn: (column) => {
     const frame = get().frame;
@@ -329,6 +353,8 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
       hypothesis: "",
       findings: [],
       report: null,
+      hypothesisAuthor: null,
+      windowAuthor: null,
       tests: [],
       lastBacktest: null,
       steps: [],

@@ -1,8 +1,16 @@
 # Compute
 
-**A research bench that a human and an agent operate together — and that keeps score of how many hypotheses have been tested.**
+**A research bench where you can check the agent's work.**
 
-Compute is a static page with no backend. Regression with autocorrelation-consistent standard errors, group comparisons, correlation, resampling and a look-ahead-free backtester all run in the browser in TypeScript. It exposes itself to an agent through [WebMCP](https://github.com/webmachinelearning/webmcp), and the whole design turns on one thing that only an in-page tool can do.
+An agent can already run your analysis in seconds. The problem is that you cannot check it. The numbers arrive with no record of how they were produced, no account of how many things were tried before one of them worked, and no way to reproduce any of it. That is true today, for anyone who has let a model loose on a spreadsheet, and it gets worse as the models get faster.
+
+Compute fixes that by construction rather than by discipline:
+
+- **A finding must cite the step that produced it.** `record_finding` refuses a claim whose citation is not in the run log. An agent cannot assert a result it did not compute.
+- **The significance threshold tightens as the session goes.** Every regression registers *every* slope as a test, not just the one you would report, and the adjusted threshold is returned inside the tool result — so the model has to reason about it too, not only the human.
+- **Every call is on the record**, with its arguments and a digest, and the report is assembled from that log rather than from the model's memory of it.
+
+It is a static page with no backend. Regression with autocorrelation-consistent standard errors, group comparisons, correlation, resampling and a look-ahead-free backtester all run in the browser in TypeScript. It exposes itself to an agent through [WebMCP](https://github.com/webmachinelearning/webmcp), and the whole design turns on one thing that only an in-page tool can do.
 
 The same tools work across five bundled datasets in four fields — climate, biology, astronomy and finance. Nothing in the tool layer knows which one is loaded: the schemas are rebuilt from whatever the page is holding, so `hypothesis_test` offers to split penguins by species and doesn't offer to split a temperature series by anything, because there is nothing there to split by.
 
@@ -80,15 +88,36 @@ npm test          # 166 tests
 npm run build     # typecheck + production build
 ```
 
-### Seeing the WebMCP side
+## Connecting an agent
 
-WebMCP needs a browser that implements it and a secure context (`localhost` counts).
+WebMCP needs a browser that implements it and a secure context (`localhost` counts, and so does any HTTPS deployment).
 
-- **ChatGPT's in-app browser** supports it out of the box.
-- **Chrome** from version 149 via origin trial, or with the testing flag: open `chrome://flags`, search `webmcp`, and enable it (reported as both `#enable-webmcp-testing` and `#enable-webmcp-for-testing` depending on build).
-- To make the deployed page work in stock Chrome without a flag, paste an origin-trial token into the `<meta http-equiv="origin-trial">` tag in [`index.html`](index.html).
+**The page tells you how.** Click the `Agent` chip in the header and it opens a panel with the steps, the URL ready to copy, and three example prompts. That panel is there because the most likely way this project fails in front of someone is that they open it in an ordinary browser, see `not attached`, and assume the agent side is aspirational.
 
-The page is honest when no host is present: the status chip in the header says `Agent · not attached`, and the registry still publishes its intended tool list, so the capability count is a statement about what this page offers rather than about what one browser managed to accept.
+**Two paths:**
+
+1. **ChatGPT's in-app browser** — supports WebMCP directly. Paste the URL into a chat and open it. This is the path the challenge judges use.
+2. **Chrome 149+** — open `chrome://flags`, search `webmcp`, enable it and restart. The flag is reported as both `#enable-webmcp-testing` and `#enable-webmcp-for-testing` depending on build. For a deployed page, an origin-trial token in the `<meta http-equiv="origin-trial">` tag in [`index.html`](index.html) removes the flag step entirely.
+
+**What success looks like:** the header chip turns green and reads `Agent · connected`, and the capability count starts moving as the agent loads data. Then ask a question in plain language — you never name a tool. For example: *"Do Adelie and Gentoo penguins differ in body mass?"*
+
+**How the connection actually works**, for anyone evaluating the implementation:
+
+```ts
+// src/webmcp/host.ts — resolve the host, preferring the canonical location
+const host = document.modelContext ?? navigator.modelContext;
+
+// One AbortController per tool. Aborting it is how a tool is removed;
+// unregisterTool was dropped from the spec in April 2026.
+const controller = new AbortController();
+await host.registerTool(descriptor, { signal: controller.signal });
+```
+
+[`src/webmcp/registry.ts`](src/webmcp/registry.ts) then re-derives the whole tool set whenever the workspace changes, serialised on a promise chain so two updates cannot interleave — which matters because registering a name that already exists *rejects* rather than replacing it.
+
+**No agent to hand?** Add `?dev=1` to the URL. That opens a console listing every registered tool with its schema, executable by hand with JSON arguments — the same tools an agent would call. The list rebuilds itself as the workspace changes, which is the most direct way to watch the registry work.
+
+The page stays honest when no host is present: the chip says `not attached`, and the registry still publishes its intended tool list, so the capability count describes what this page offers rather than what one browser managed to accept.
 
 ### What the page shows, and what it doesn't
 

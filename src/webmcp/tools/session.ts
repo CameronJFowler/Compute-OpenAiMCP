@@ -152,7 +152,7 @@ export function loadDatasetTool(): ToolDescriptor {
 
       const start = readString(input, "start");
       const end = readString(input, "end");
-      if (start || end) store.setSampleWindow(start, end);
+      if (start || end) store.setSampleWindow(start, end, "agent");
 
       const range = dateRange(frame);
       store.setView({
