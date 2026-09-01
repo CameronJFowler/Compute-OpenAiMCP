@@ -152,6 +152,20 @@ interface WorkspaceState {
 
   // ---- presentation ------------------------------------------------------
   view: WorkspaceView;
+
+  /**
+   * What each completed step put on screen.
+   *
+   * The run log has always recorded that a step happened; this records what it
+   * showed, which is what makes the log navigable rather than merely auditable.
+   * Views are already downsampled for the charts, so keeping one per step costs
+   * little and turns "provenance" into something you can actually walk back
+   * through.
+   */
+  viewByStep: Record<number, WorkspaceView>;
+
+  /** The step being re-examined, or null when looking at the latest result. */
+  viewingStep: number | null;
   pendingApproval: ApprovalRequest | null;
   registeredTools: string[];
   webmcpStatus: WebmcpStatus;
@@ -173,6 +187,10 @@ interface WorkspaceState {
   ) => void;
   setView: (view: WorkspaceView) => void;
   setLastBacktest: (result: BacktestResult | null) => void;
+  /** Re-display what a completed step showed. */
+  restoreStep: (id: number) => void;
+  /** Return to the most recent result. */
+  returnToLatest: () => void;
   addFinding: (text: string, supportingSteps: number[]) => Finding;
   setReport: (markdown: string) => void;
   setRegisteredTools: (names: string[]) => void;
@@ -211,6 +229,8 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
   steps: [],
 
   view: { kind: "empty" },
+  viewByStep: {},
+  viewingStep: null,
   pendingApproval: null,
   registeredTools: [],
   webmcpStatus: { kind: "unavailable", reason: "not checked yet" },
@@ -281,9 +301,30 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
           ? { ...s, digest, status, pValue, durationMs: Date.now() - s.startedAt }
           : s,
       ),
+      // Snapshot what this step put on screen. Tools call setView before they
+      // return, so by the time the step closes the view is the one it produced.
+      viewByStep:
+        status === "ok" && state.view.kind !== "empty"
+          ? { ...state.viewByStep, [id]: state.view }
+          : state.viewByStep,
     })),
 
-  setView: (view) => set({ view }),
+  // A new result always takes you back to the present.
+  setView: (view) => set({ view, viewingStep: null }),
+
+  restoreStep: (id) =>
+    set((state) => {
+      const snapshot = state.viewByStep[id];
+      return snapshot ? { view: snapshot, viewingStep: id } : {};
+    }),
+
+  returnToLatest: () =>
+    set((state) => {
+      const ids = Object.keys(state.viewByStep).map(Number);
+      if (ids.length === 0) return { viewingStep: null };
+      const latest = Math.max(...ids);
+      return { view: state.viewByStep[latest], viewingStep: null };
+    }),
 
   setLastBacktest: (result) => set({ lastBacktest: result }),
 
@@ -352,6 +393,8 @@ export const useWorkspace = create<WorkspaceState>()((set, get) => ({
       lastBacktest: null,
       steps: [],
       view: { kind: "empty" },
+      viewByStep: {},
+      viewingStep: null,
       pendingApproval: null,
       progress: null,
     }),

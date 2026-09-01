@@ -428,6 +428,76 @@ describe("refusing to guess the data", () => {
   }, 30000);
 });
 
+/**
+ * A log you can only read tells you a result existed. A log you can walk back
+ * through lets you check it, which is the difference this project argues for.
+ */
+describe("walking back through the session", () => {
+  it("remembers what each step put on screen and can bring it back", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    await call("summary_stats", { columns: ["body_mass_g"] });
+
+    const store = useWorkspace.getState();
+    const [first, second] = store.steps.filter((s) => s.status === "ok");
+
+    // Two different results, both remembered.
+    expect(store.viewByStep[first.id]).toBeDefined();
+    expect(store.viewByStep[second.id]).toBeDefined();
+    expect(store.viewByStep[first.id]).not.toEqual(store.viewByStep[second.id]);
+
+    // The newest is on screen and we are in the present.
+    expect(useWorkspace.getState().viewingStep).toBeNull();
+    expect(useWorkspace.getState().view).toEqual(store.viewByStep[second.id]);
+
+    useWorkspace.getState().restoreStep(first.id);
+    expect(useWorkspace.getState().view).toEqual(store.viewByStep[first.id]);
+    expect(useWorkspace.getState().viewingStep).toBe(first.id);
+
+    useWorkspace.getState().returnToLatest();
+    expect(useWorkspace.getState().view).toEqual(store.viewByStep[second.id]);
+    expect(useWorkspace.getState().viewingStep).toBeNull();
+  }, 30000);
+
+  it("returns to the present when a new result arrives", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    const first = useWorkspace.getState().steps.filter((s) => s.status === "ok")[0];
+
+    useWorkspace.getState().restoreStep(first.id);
+    expect(useWorkspace.getState().viewingStep).toBe(first.id);
+
+    // Reading history must not leave a later result hidden behind it.
+    await call("summary_stats", { columns: ["flipper_length_mm"] });
+    expect(useWorkspace.getState().viewingStep).toBeNull();
+  }, 30000);
+
+  it("does not offer to restore a step that failed", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    const before = Object.keys(useWorkspace.getState().viewByStep).length;
+
+    const failed = await call("summary_stats", { columns: ["no_such_column"] });
+    expect(failed.isError).toBe(true);
+
+    expect(Object.keys(useWorkspace.getState().viewByStep)).toHaveLength(before);
+  }, 30000);
+
+  it("clears the session so a new question starts clean", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    await call("summary_stats", { columns: ["body_mass_g"] });
+    expect(useWorkspace.getState().steps.length).toBeGreaterThan(0);
+
+    // What the back button does.
+    useWorkspace.getState().reset();
+
+    const after = useWorkspace.getState();
+    expect(after.frame).toBeNull();
+    expect(after.steps).toEqual([]);
+    expect(after.viewByStep).toEqual({});
+    expect(after.viewingStep).toBeNull();
+    expect(after.view.kind).toBe("empty");
+    expect(after.tests).toEqual([]);
+  }, 30000);
+});
+
 describe("the human grabbing the wheel", () => {
   /**
    * Narrowing the sample window must change what the next tool call computes

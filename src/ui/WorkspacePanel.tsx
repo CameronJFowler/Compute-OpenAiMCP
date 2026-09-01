@@ -755,10 +755,29 @@ export function WorkspacePanel() {
   const view = useWorkspace((s) => s.view);
   const progress = useWorkspace((s) => s.progress);
   const stepCount = useWorkspace((s) => s.steps.length);
+  const viewingStep = useWorkspace((s) => s.viewingStep);
+  const returnToLatest = useWorkspace((s) => s.returnToLatest);
 
   return (
     <div className="h-full overflow-y-auto px-6 py-5">
       <ApprovalCard />
+
+      {/* Looking at an earlier result. Say so, or the numbers on screen will be
+          read as the current ones. */}
+      {viewingStep !== null && (
+        <div className="mb-5 flex items-center gap-3 rounded-md border border-hair bg-panel px-3.5 py-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+          <span className="text-[12px] text-ink2">
+            Showing step {viewingStep}, not the latest result.
+          </span>
+          <button
+            onClick={returnToLatest}
+            className="ml-auto px-2 py-[3px] text-[11.5px] rounded border border-hair text-ink3 hover:text-ink hover:border-hair2 transition"
+          >
+            Back to latest
+          </button>
+        </div>
+      )}
 
       {progress && (
         <div className="mb-5 max-w-md">

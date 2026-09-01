@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { APP_NAME } from "../config";
 import { getTestingSummary, useWorkspace } from "../state/workspace";
 import { ActivityLog } from "./ActivityLog";
@@ -57,6 +59,65 @@ function SignificanceReadout() {
   );
 }
 
+/**
+ * The way back out.
+ *
+ * Until now the only route from a loaded workspace to a different question was
+ * reloading the page. Starting over discards the session record, so when there
+ * is anything to lose this asks first - the same courtesy the agent gets before
+ * an expensive call, applied to the human.
+ */
+function NewQuestion() {
+  const frame = useWorkspace((s) => s.frame);
+  const steps = useWorkspace((s) => s.steps);
+  const findings = useWorkspace((s) => s.findings);
+  const reset = useWorkspace((s) => s.reset);
+  const [confirming, setConfirming] = useState(false);
+
+  if (!frame) return null;
+
+  const worthLosing = steps.length > 0 || findings.length > 0;
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11.5px] text-ink2">
+          Discard {steps.length} step{steps.length === 1 ? "" : "s"}
+          {findings.length > 0 &&
+            ` and ${findings.length} finding${findings.length === 1 ? "" : "s"}`}
+          ?
+        </span>
+        <button
+          onClick={() => {
+            reset();
+            setConfirming(false);
+          }}
+          className="px-2 py-[3px] text-[11.5px] rounded bg-accent text-canvas hover:brightness-110 transition"
+        >
+          Discard
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="px-2 py-[3px] text-[11.5px] rounded border border-hair text-ink3 hover:text-ink transition"
+        >
+          Keep
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => (worthLosing ? setConfirming(true) : reset())}
+      title="Start a new investigation"
+      className="flex items-center gap-1.5 px-2.5 h-7 rounded border border-hair text-ink3 hover:text-ink hover:border-hair2 transition"
+    >
+      <span aria-hidden="true">&larr;</span>
+      <span className="text-[12px]">New question</span>
+    </button>
+  );
+}
+
 export function App() {
   const devMode = new URLSearchParams(window.location.search).has("dev");
 
@@ -69,6 +130,8 @@ export function App() {
             Research bench
           </span>
         </div>
+
+        <NewQuestion />
 
         <div className="ml-auto flex items-center gap-5">
           <SignificanceReadout />
