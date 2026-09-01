@@ -66,6 +66,27 @@ function toolNames(): string[] {
 }
 
 describe("a full session on the industry panel", () => {
+  it("starts from a plain-language question and selects the matching dataset", async () => {
+    const started = await call("set_hypothesis", {
+      hypothesis: "Do Adelie and Gentoo penguins differ in body mass?",
+    });
+
+    expect(started.isError).toBe(false);
+    expect(started.text).toContain("Dataset selection: matched");
+    expect(started.text).toContain("Loaded penguins: 344 rows");
+    expect(useWorkspace.getState().datasetId).toBe("penguins");
+    expect(useWorkspace.getState().hypothesis).toContain("Gentoo");
+    expect(toolNames()).toContain("hypothesis_test");
+
+    const question = await call("set_hypothesis", {
+      hypothesis: "Is there a momentum effect in US industry returns after transaction costs?",
+    });
+    expect(question.isError).toBe(false);
+    expect(question.text).toContain("Loaded industries_daily: 135534 rows");
+    expect(useWorkspace.getState().datasetId).toBe("industries_daily");
+    expect(toolNames()).toContain("run_regression");
+  }, 30000);
+
   it("loads the bundled panel with the factors joined on", async () => {
     expect(toolNames()).toHaveLength(4);
 

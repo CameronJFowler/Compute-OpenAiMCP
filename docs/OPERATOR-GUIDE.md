@@ -24,7 +24,8 @@ tools directly in the browser whenever a compatible host is present.
 ### ChatGPT in-app browser
 
 1. Open the deployed Compute URL from a ChatGPT conversation.
-2. Ask a plain-language research question; do not name a tool.
+2. Ask a plain-language research question; do not name a tool or dataset.
+   Compute selects and loads the matching bundled data from the question.
 3. When the page header changes from `Session local` to `Session live`, the
    agent browser has discovered the page's tool surface.
 
@@ -38,7 +39,7 @@ tools directly in the browser whenever a compatible host is present.
 ### Success criteria
 
 - The header says `Session live`.
-- Loading a dataset changes the action count from 4 to 12.
+- Asking the first question selects and loads a dataset, changing the action count from 4 to 12.
 - Creating a feature changes it again.
 - Agent-produced results appear in the workspace and in the session record.
 - An expensive bootstrap presents an approval card instead of running silently.

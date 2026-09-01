@@ -19,15 +19,16 @@ import {
 import type { ToolDescriptor } from "../host";
 import { buildReportSchema, recordFindingSchema, setHypothesisSchema } from "../schemas";
 import { defineTool, fmt, readIntegerArray, readString, type ToolOutcome } from "./common";
+import { loadDatasetForQuestion } from "./session";
 
 export function setHypothesisTool(): ToolDescriptor {
   return defineTool({
     name: "set_hypothesis",
     description:
-      "Writes the research question into the brief panel, where the human can see and edit it. Call this early, before you start testing things - stating the question first is what makes it possible to tell afterwards whether you answered it or merely found something. The human can rewrite it at any moment and your next call will see their version.",
+      "Start research from the user's plain-language question. This writes the question into the brief, selects the relevant bundled dataset automatically, loads it, and rebuilds the analysis tools around the actual columns in that data. Call this first whenever the user asks a research question. The human can edit the question at any moment and your next call will see their version.",
     inputSchema: setHypothesisSchema(),
     annotations: { readOnlyHint: false, idempotentHint: true },
-    run: (input): ToolOutcome => {
+    run: async (input): Promise<ToolOutcome> => {
       const hypothesis = readString(input, "hypothesis");
       if (!hypothesis) {
         return {
@@ -38,19 +39,22 @@ export function setHypothesisTool(): ToolDescriptor {
       }
       const previous = useWorkspace.getState().hypothesis;
       useWorkspace.getState().setHypothesis(hypothesis, "agent");
+      const loaded = await loadDatasetForQuestion(hypothesis);
+      if (!loaded.ok) return loaded;
 
       return {
         ok: true,
         summary: [
           `Hypothesis set: ${hypothesis}`,
           previous ? `(replaced: ${previous})` : "",
-          "It is now in the brief panel and the human can edit it.",
+          loaded.summary,
+          "The question and data are now in the shared workspace.",
         ]
           .filter(Boolean)
           .join("\n"),
-        structured: { hypothesis },
-        digest: `hypothesis: ${hypothesis.slice(0, 90)}`,
-        next: ["list_datasets", "load_dataset", "run_regression"],
+        structured: { hypothesis, ...loaded.structured },
+        digest: `started research: ${hypothesis.slice(0, 70)}`,
+        next: loaded.next,
       };
     },
   });

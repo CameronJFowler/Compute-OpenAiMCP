@@ -3,6 +3,7 @@
  */
 
 import { DATASETS, findDataset } from "../../config";
+import { routedDataset } from "../../engine/dataset-router";
 import { countFinite, dateRange, uniqueEntities } from "../../engine/frame";
 import { loadDataset as loadDatasetFile } from "../../engine/loader";
 import { moments } from "../../engine/stats";
@@ -21,7 +22,7 @@ export function listDatasetsTool(): ToolDescriptor {
   return defineTool({
     name: "list_datasets",
     description:
-      "Lists the datasets bundled with this page: id, domain, shape, and what each column means. Call this first. Then call load_dataset - the analysis tools do not exist until a dataset is loaded, and when it loads they are registered with that dataset's actual column names inside their schemas.",
+      "Lists the datasets bundled with this page: id, domain, shape, and what each column means. Normally use set_hypothesis with the user's question instead: it selects and loads the relevant dataset automatically. Use this only to inspect the available data or make a deliberate manual choice.",
     annotations: { readOnlyHint: true },
     run: (): ToolOutcome => {
       const lines = DATASETS.map(
@@ -38,7 +39,7 @@ export function listDatasetsTool(): ToolDescriptor {
             layout: d.layout,
           })),
         },
-        next: ["load_dataset", "set_hypothesis"],
+        next: ["set_hypothesis", "load_dataset"],
       };
     },
   });
@@ -125,7 +126,17 @@ export function loadDatasetTool(): ToolDescriptor {
     inputSchema: loadDatasetSchema(),
     annotations: { readOnlyHint: false, idempotentHint: true },
     run: async (input): Promise<ToolOutcome> => {
-      const id = readString(input, "dataset_id");
+      return loadDatasetById(readString(input, "dataset_id"), input);
+    },
+  });
+}
+
+/** Shared loading path for an explicit selection and question-based routing. */
+export async function loadDatasetById(
+  id: string | null | undefined,
+  input: Record<string, unknown> = {},
+  route?: ReturnType<typeof routedDataset>,
+): Promise<ToolOutcome> {
       if (!id) {
         return {
           ok: false,
@@ -181,10 +192,16 @@ export function loadDatasetTool(): ToolDescriptor {
 
       const after = availability().names;
       const gained = newlyAvailable(before, after);
+      const routeLine = route
+        ? route.fallback
+          ? "Dataset selection: no domain-specific terms found; defaulted to the quantitative research panel."
+          : `Dataset selection: matched ${route.matchedTerms.join(", ")}.`
+        : null;
 
       return {
         ok: true,
         summary: [
+          routeLine,
           `Loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} columns.`,
           range ? `Dates ${range.start} to ${range.end}.` : "No date dimension.",
           frame.entities ? `${uniqueEntities(frame).length} entities.` : "Single series.",
@@ -194,6 +211,8 @@ export function loadDatasetTool(): ToolDescriptor {
         ].join("\n"),
         structured: {
           dataset: entry.id,
+          selected_from_question: route !== undefined,
+          matched_terms: route?.matchedTerms ?? [],
           n_rows: frame.nRows,
           columns: frame.columnOrder,
           newly_available_tools: gained,
@@ -201,8 +220,12 @@ export function loadDatasetTool(): ToolDescriptor {
         digest: `loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} cols`,
         next: ["describe_dataset", "add_feature", "run_regression"],
       };
-    },
-  });
+}
+
+/** Choose the data matching a plain-language question without exposing IDs. */
+export async function loadDatasetForQuestion(question: string): Promise<ToolOutcome> {
+  const route = routedDataset(question, DATASETS);
+  return loadDatasetById(route.datasetId, {}, route);
 }
 
 export function describeDatasetTool(columns: string[]): ToolDescriptor {
