@@ -249,7 +249,11 @@ Five datasets across four fields, bundled and committed — 1.5 MB total. No API
 | `industries_daily.csv` | finance | 49 US industry portfolios, daily returns, 2015–2025 (135,534 rows) | Kenneth R. French Data Library |
 | `ff_factors_daily.csv` | finance | Fama-French 3 factors + RF, daily | Kenneth R. French Data Library |
 
-Three of these exist to prove the bench is not domain software wearing a general coat:
+**Or bring your own.** Drop a CSV onto the page and it becomes the workspace — parsed in the browser, never uploaded. The shape is inferred rather than declared: a leading column of ISO dates makes it a series, a repeating label alongside those dates makes it a panel, neither makes it a plain cross-section, and every column's type comes from its content.
+
+This is the sharpest demonstration of the reactive registry available, because nothing is special-cased. The page has never seen your columns and neither has the agent, but the schemas are derived from whatever the workspace holds — so the moment your file lands, `run_regression` is offering an enum of *your* column names and `hypothesis_test` is offering *your* categorical columns as groupings. Verified end to end in `tests/user-data.test.ts`.
+
+Three bundled datasets exist to prove the bench is not domain software wearing a general coat:
 
 - **Penguins** is a plain cross-section with no time dimension at all. It is what forces `hypothesis_test` to take `group_column` / `group_a` / `group_b` and split one measurement by a factor, rather than only comparing two columns that happen to sit side by side. The categorical columns are detected by content, not by position.
 - **Climate** joins two records that only partly overlap: CO₂ begins in 1959, temperature in 1850. A regression across them drops the non-overlapping years and reports how many, which is the honest behaviour worth showing. The two temperature estimates measure the same quantity by different methods, so a paired test between them is a real question.

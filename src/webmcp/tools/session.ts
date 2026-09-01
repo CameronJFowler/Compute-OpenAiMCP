@@ -5,7 +5,7 @@
 import { DATASETS, findDataset } from "../../config";
 import { routedDataset } from "../../engine/dataset-router";
 import { countFinite, dateRange, uniqueEntities } from "../../engine/frame";
-import { loadDataset as loadDatasetFile } from "../../engine/loader";
+import { USER_DATASET_ID, loadDataset as loadDatasetFile } from "../../engine/loader";
 import { moments } from "../../engine/stats";
 import {
   getEffectiveFrame,
@@ -233,6 +233,27 @@ export async function loadDatasetById(
  * failure that cannot be allowed to be quiet.
  */
 export async function loadDatasetForQuestion(question: string): Promise<ToolOutcome> {
+  // If the operator brought their own file, that is the data. Routing a
+  // question to a bundled dataset would silently discard what they loaded.
+  const current = useWorkspace.getState().frame;
+  if (current?.id === USER_DATASET_ID) {
+    return {
+      ok: true,
+      summary: [
+        `Using the data you loaded: ${current.name} (${current.nRows} rows, ${current.columnOrder.length} columns).`,
+        `Columns: ${current.columnOrder.join(", ")}`,
+        "The analysis tools are already registered against these columns. Call describe_dataset before assuming what any of them mean.",
+      ].join("\n"),
+      structured: {
+        dataset: USER_DATASET_ID,
+        operator_supplied: true,
+        columns: current.columnOrder,
+      },
+      digest: `using operator data: ${current.name}`,
+      next: ["describe_dataset", "summary_stats", "run_regression"],
+    };
+  }
+
   const route = routedDataset(question, DATASETS);
 
   if (route.fallback) {

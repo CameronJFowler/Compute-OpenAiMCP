@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 
 import { DATASETS, OPERATOR_GUIDE_URL } from "../config";
+import { USER_DATASET_ID, buildFrameFromCsv } from "../engine/loader";
+import { moments } from "../engine/stats";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
 import { setNextActor } from "../webmcp/tools/common";
 import { setHypothesisTool } from "../webmcp/tools/report";
@@ -109,6 +111,59 @@ function EmptyState() {
   // Set when the question matched no bundled dataset. The page asks rather
   // than analysing whatever happens to be nearest.
   const [needsChoice, setNeedsChoice] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  /**
+   * Take a CSV the operator brought and make it the workspace.
+   *
+   * Nothing leaves the page. The registry is watching the store, so by the time
+   * this returns the agent's schemas already carry these column names.
+   */
+  const loadFile = async (file: File) => {
+    setError(null);
+    setNeedsChoice(false);
+    setSubmitting(true);
+    try {
+      const frame = buildFrameFromCsv(file.name, await file.text());
+      const store = useWorkspace.getState();
+      store.loadFrame(frame, USER_DATASET_ID, file.name);
+      // beginStep returns the id; the captured store's `steps` array is the one
+      // from before the call and would leave the step showing as still running.
+      const stepId = store.beginStep("load_file", { file: file.name }, "human");
+      useWorkspace
+        .getState()
+        .completeStep(
+          stepId,
+          `loaded ${file.name}: ${frame.nRows} rows, ${frame.columnOrder.length} columns`,
+          "ok",
+        );
+      store.setView({
+        kind: "dataset",
+        title: file.name,
+        headers: ["column", "type", "n", "missing", "mean", "sd"],
+        note: "Your file, parsed in this page. Nothing was uploaded. The analysis tools now carry these column names in their schemas.",
+        rows: frame.columnOrder.map((name) => {
+          const column = frame.columns[name];
+          if (column.kind !== "numeric") {
+            return { label: name, values: ["category", String(frame.nRows), "0", "-", "-"] };
+          }
+          const m = moments(column.values);
+          return {
+            label: name,
+            values: ["numeric", String(m.n), String(m.missing), n(m.mean, 4), n(m.sd, 4)],
+          };
+        }),
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Could not read that file: ${err.message}`
+          : "Could not read that file.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const start = async (text: string) => {
     if (!text || submitting) return;
@@ -225,7 +280,43 @@ function EmptyState() {
           </div>
         )}
 
-        <p className="mt-6 pt-4 border-t border-hair text-[11.5px] text-ink3 leading-relaxed">
+        <div className="mt-5 pt-4 border-t border-hair">
+          <label
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              const file = event.dataTransfer.files[0];
+              if (file) void loadFile(file);
+            }}
+            className={`block rounded-md border border-dashed px-4 py-3 cursor-pointer transition-colors ${
+              dragging ? "border-accent bg-accent/[0.05]" : "border-hair2 hover:border-ink3"
+            }`}
+          >
+            <input
+              type="file"
+              accept=".csv,text/csv,text/plain"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void loadFile(file);
+              }}
+            />
+            <div className="text-[12.5px] text-ink2">
+              Or bring your own CSV — drop it here, or click to choose.
+            </div>
+            <div className="text-[11.5px] text-ink3 leading-relaxed mt-0.5">
+              Parsed in this page and never uploaded. The agent&apos;s tools are
+              rebuilt around your columns the moment it loads.
+            </div>
+          </label>
+        </div>
+
+        <p className="mt-5 pt-4 border-t border-hair text-[11.5px] text-ink3 leading-relaxed">
           Working with an agent? Ask it the same question instead — through WebMCP it
           drives these exact tools, and the results land here rather than in the chat.{" "}
           <a

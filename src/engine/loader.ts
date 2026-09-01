@@ -326,6 +326,93 @@ function buildCrossSection(entry: DatasetManifestEntry, csvText: string): Frame 
   };
 }
 
+/** Identifies a frame the operator supplied rather than one we shipped. */
+export const USER_DATASET_ID = "user_data";
+
+const ISO_DATE = /^\d{4}-\d{1,2}-\d{1,2}/;
+
+/**
+ * Build a frame from a CSV the operator brought.
+ *
+ * This is the point at which the bench stops being a demo over five files. The
+ * page has never seen these columns, and neither has the agent - but the
+ * registry derives the tool schemas from whatever the workspace holds, so the
+ * moment this lands the agent's `run_regression` is offering enums of the
+ * operator's own column names. Nothing about that path is special-cased.
+ *
+ * Shape is inferred, not declared: a first column of ISO dates makes it a
+ * series, a repeating categorical column makes it a panel, and neither makes it
+ * a plain cross-section. Column types come from content, as everywhere else.
+ */
+export function buildFrameFromCsv(fileName: string, csvText: string): Frame {
+  const rows = parseCsv(csvText);
+  if (rows.length < 2) {
+    throw new Error("that file has a header but no data rows");
+  }
+
+  const header = rows[0].map((h) => h.trim());
+  if (header.length < 2) {
+    throw new Error("a single column cannot be analysed; two or more are needed");
+  }
+
+  const dataRows = rows.slice(1).filter((r) => r.length === header.length);
+  if (dataRows.length === 0) {
+    throw new Error(
+      `no rows had the same number of fields as the header (${header.length})`,
+    );
+  }
+
+  const firstColumn = dataRows.map((r) => r[0].trim());
+  const dateLike =
+    firstColumn.filter((v) => ISO_DATE.test(v)).length >= firstColumn.length * 0.8;
+
+  const dates = dateLike ? firstColumn : null;
+  const firstDataColumn = dateLike ? 1 : 0;
+
+  const columns: Record<string, Column> = {};
+  const columnOrder: string[] = [];
+  let labelColumn: string | null = null;
+
+  for (let j = firstDataColumn; j < header.length; j++) {
+    const name = header[j] || `column_${j + 1}`;
+    const raw = dataRows.map((r) => r[j].trim());
+    const kind = inferKind(raw);
+
+    if (kind === "category") {
+      columns[name] = {
+        name,
+        kind: "category",
+        values: raw.map(() => NaN),
+        labels: raw,
+        derived: false,
+        forwardLooking: false,
+        note: "Categorical column from your file.",
+      };
+      if (!labelColumn) labelColumn = name;
+    } else {
+      columns[name] = makeColumn(name, raw.map(toNumber), "Numeric column from your file.");
+    }
+    columnOrder.push(name);
+  }
+
+  if (columnOrder.length === 0) {
+    throw new Error("no usable columns were found after the date column");
+  }
+
+  return {
+    id: USER_DATASET_ID,
+    name: fileName,
+    domain: "your data",
+    nRows: dataRows.length,
+    dates,
+    // A repeating label alongside dates is a panel; on its own it names the rows.
+    entities: labelColumn ? (columns[labelColumn].labels as string[]) : null,
+    columnOrder,
+    columns,
+    source: `Supplied by the operator: ${fileName}. Not bundled with this page and not sent anywhere - it was parsed in the browser.`,
+  };
+}
+
 export function buildFrame(
   entry: DatasetManifestEntry,
   csvText: string,
