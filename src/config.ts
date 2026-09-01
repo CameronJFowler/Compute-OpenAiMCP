@@ -1,6 +1,10 @@
 /** Product name. Change it here and it changes everywhere. */
 export const APP_NAME = "Compute";
 
+/** Where the running app points anyone who wants to attach an agent. */
+export const OPERATOR_GUIDE_URL =
+  "https://github.com/CameronJFowler/Compute-OpenAiMCP/blob/main/docs/OPERATOR-GUIDE.md";
+
 export const APP_TAGLINE =
   "A research bench where you can check the agent's work.";
 

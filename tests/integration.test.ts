@@ -313,6 +313,121 @@ describe("the same tools on other domains", () => {
   }, 30000);
 });
 
+describe("comparing more than two groups", () => {
+  /**
+   * The reason anova exists here. Penguins has three species, so answering
+   * "do the species differ in body mass" with pairwise t-tests takes three
+   * tests - which is precisely the multiple-comparison behaviour the session
+   * counter exists to police. The omnibus test answers it with one.
+   */
+  it("runs a one-way F test across every group at once", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+
+    const result = await call("hypothesis_test", {
+      test: "anova",
+      column: "body_mass_g",
+      group_column: "species",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain(
+      "H0: mean body_mass_g is the same across all 3 groups of species.",
+    );
+    expect(result.text).toMatch(/F=\d/);
+    // Gentoo are far heavier than the other two; this is not marginal.
+    expect(result.text).toMatch(/p=0\.0000|p=\d\.\d+e-/);
+    // One test, not three.
+    expect(useWorkspace.getState().tests).toHaveLength(1);
+    expect(result.text).toContain("would have been 3 tests");
+  }, 30000);
+
+  it("refuses a group column that is not categorical", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    const result = await call("hypothesis_test", {
+      test: "anova", column: "body_mass_g", group_column: "bill_length_mm",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("not a categorical column");
+  }, 30000);
+});
+
+describe("relating two categorical columns", () => {
+  it("tests independence with chi-square", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+
+    const result = await call("hypothesis_test", {
+      test: "chi_square",
+      group_column: "species",
+      second_group_column: "island",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("H0: species and island are independent.");
+    // Chinstrap live only on Dream and Gentoo only on Biscoe, so species and
+    // island are about as dependent as two columns can be.
+    expect(result.text).toMatch(/p=0\.0000|p=\d\.\d+e-/);
+    expect(result.text).toContain("chi-square=");
+  }, 30000);
+
+  it("refuses to test a column against itself", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    const result = await call("hypothesis_test", {
+      test: "chi_square", group_column: "species", second_group_column: "species",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("perfectly dependent on itself");
+  }, 30000);
+
+  it("does not offer either test on a dataset with no categories", async () => {
+    await call("load_dataset", { dataset_id: "climate_annual" });
+    const descriptor = currentDescriptors().find((d) => d.name === "hypothesis_test");
+    const tests = descriptor?.inputSchema?.properties?.test as { enum: string[] };
+
+    expect(tests.enum).toContain("one_sample_t");
+    expect(tests.enum).not.toContain("anova");
+    expect(tests.enum).not.toContain("chi_square");
+    expect(descriptor?.inputSchema?.properties?.second_group_column).toBeUndefined();
+  }, 30000);
+});
+
+describe("refusing to guess the data", () => {
+  /**
+   * The failure this prevents: asking about education spending and silently
+   * receiving 135,534 rows of equity returns. On a bench whose claim is that
+   * an agent's numbers should be checkable, quietly analysing the nearest data
+   * is the one failure that cannot be allowed to be quiet.
+   */
+  it("loads nothing and lists the options when no dataset matches", async () => {
+    const result = await call("set_hypothesis", {
+      hypothesis: "Does higher education spending improve student test scores?",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("NO DATA LOADED");
+    expect(useWorkspace.getState().frame).toBeNull();
+
+    // It names everything available rather than picking one.
+    for (const id of ["penguins", "climate_annual", "industries_daily", "hubble_1929"]) {
+      expect(result.text).toContain(id);
+    }
+    // The analysis tools stay unregistered, because there is nothing to analyse.
+    expect(toolNames()).not.toContain("run_regression");
+  }, 30000);
+
+  it("still records the question so the human can see what was asked", async () => {
+    await call("set_hypothesis", { hypothesis: "Is there any pattern in the noise?" });
+    expect(useWorkspace.getState().hypothesis).toBe("Is there any pattern in the noise?");
+  }, 30000);
+
+  it("routes confidently when the question names a domain", async () => {
+    const result = await call("set_hypothesis", {
+      hypothesis: "Do Adelie and Gentoo penguins differ in body mass?",
+    });
+    expect(result.text).toContain("Dataset selection: matched");
+    expect(useWorkspace.getState().datasetId).toBe("penguins");
+  }, 30000);
+});
+
 describe("the human grabbing the wheel", () => {
   /**
    * Narrowing the sample window must change what the next tool call computes

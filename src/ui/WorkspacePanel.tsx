@@ -1,9 +1,11 @@
-import { FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 
+import { DATASETS, OPERATOR_GUIDE_URL } from "../config";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
 import { setNextActor } from "../webmcp/tools/common";
 import { setHypothesisTool } from "../webmcp/tools/report";
+import { loadDatasetTool } from "../webmcp/tools/session";
 import { ApprovalCard } from "./ApprovalCard";
 import {
   BASE_PLUGINS,
@@ -94,18 +96,25 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 /**
  * The calm starting point before data is loaded.
  */
+const EXAMPLE_QUESTIONS = [
+  "Do Adelie and Gentoo penguins differ in body mass?",
+  "How much of global temperature variation is explained by CO2?",
+  "Does industry momentum survive out of sample and transaction costs?",
+];
+
 function EmptyState() {
   const [question, setQuestion] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the question matched no bundled dataset. The page asks rather
+  // than analysing whatever happens to be nearest.
+  const [needsChoice, setNeedsChoice] = useState(false);
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const text = question.trim();
+  const start = async (text: string) => {
     if (!text || submitting) return;
-
     setSubmitting(true);
     setError(null);
+    setNeedsChoice(false);
     setNextActor("human");
 
     try {
@@ -113,9 +122,23 @@ function EmptyState() {
         isError?: boolean;
         content?: { text?: string }[];
       };
-      if (result.isError) setError(result.content?.[0]?.text ?? "Unable to start research.");
+      if (result.isError) {
+        setError(result.content?.[0]?.text ?? "Unable to start research.");
+      } else if (!useWorkspace.getState().frame) {
+        setNeedsChoice(true);
+      }
     } catch {
       setError("Unable to start research.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const chooseDataset = async (datasetId: string) => {
+    setSubmitting(true);
+    setNextActor("human");
+    try {
+      await loadDatasetTool().execute({ dataset_id: datasetId });
     } finally {
       setSubmitting(false);
     }
@@ -124,12 +147,20 @@ function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center py-12">
       <div className="max-w-xl w-full">
-        <div className="mb-7">
+        <div className="mb-6">
           <div className="label mb-2">Research workspace</div>
-          <h1 className="text-[22px] text-ink tracking-tight">What would you like to investigate?</h1>
+          <h1 className="text-[22px] text-ink tracking-tight">
+            What would you like to investigate?
+          </h1>
         </div>
 
-        <form onSubmit={submit} className="flex gap-2">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void start(question.trim());
+          }}
+          className="flex gap-2"
+        >
           <input
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
@@ -147,6 +178,66 @@ function EmptyState() {
         </form>
 
         {error && <p className="mt-3 text-[11.5px] text-neg">{error}</p>}
+
+        {needsChoice ? (
+          <div className="mt-5 border border-hair rounded-md bg-panel p-4">
+            <div className="text-[12.5px] text-ink mb-1">
+              Nothing bundled here clearly answers that.
+            </div>
+            <p className="text-[11.5px] text-ink3 leading-relaxed mb-3">
+              Rather than analyse the nearest data and let you assume it was the right
+              data, here is everything on hand. Pick one, or ask something else.
+            </p>
+            <ul className="space-y-1.5">
+              {DATASETS.map((d) => (
+                <li key={d.id}>
+                  <button
+                    onClick={() => void chooseDataset(d.id)}
+                    disabled={submitting}
+                    className="w-full text-left px-2.5 py-1.5 rounded border border-hair hover:border-hair2 transition disabled:opacity-40"
+                  >
+                    <span className="text-[12px] text-ink">{d.name}</span>
+                    <span className="text-[11px] text-ink3 ml-2">{d.domain}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div className="mt-5">
+            <div className="label mb-2">For example</div>
+            <ul className="space-y-1.5">
+              {EXAMPLE_QUESTIONS.map((example) => (
+                <li key={example}>
+                  <button
+                    onClick={() => {
+                      setQuestion(example);
+                      void start(example);
+                    }}
+                    disabled={submitting}
+                    className="text-left text-[12px] text-ink2 hover:text-ink transition disabled:opacity-40"
+                  >
+                    {example}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <p className="mt-6 pt-4 border-t border-hair text-[11.5px] text-ink3 leading-relaxed">
+          Working with an agent? Ask it the same question instead — through WebMCP it
+          drives these exact tools, and the results land here rather than in the chat.{" "}
+          <a
+            href={OPERATOR_GUIDE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-ink2 underline decoration-hair2 underline-offset-2 hover:text-ink"
+          >
+            How to connect one
+          </a>
+          .
+        </p>
       </div>
     </div>
   );
@@ -595,7 +686,13 @@ export function WorkspacePanel() {
 
       {/* Keyed on the step count so each completed call re-mounts and the
           settle animation replays. Every tool call visibly changes something. */}
-      <div key={stepCount} className={view.kind === "empty" ? "h-full" : "settle rounded-md"}>
+      {/* Re-mounting on each step is what replays the settle animation, but the
+          empty state owns local state (the question, and whether we had to ask
+          which dataset) and must survive the very call it just made. */}
+      <div
+        key={view.kind === "empty" ? "empty" : stepCount}
+        className={view.kind === "empty" ? "h-full" : "settle rounded-md"}
+      >
         {view.kind === "empty" && <EmptyState />}
         {view.kind === "dataset" && (
           <div>

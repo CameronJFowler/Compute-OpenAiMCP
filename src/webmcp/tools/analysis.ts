@@ -8,7 +8,7 @@
  * that does to the threshold.
  */
 
-import { chi2UpperTailP, studentTTwoSidedP } from "../../engine/dist";
+import { chi2UpperTailP, fUpperTailP, studentTTwoSidedP } from "../../engine/dist";
 import { getColumn } from "../../engine/frame";
 import { formatMultipleTestingBlock, judge } from "../../engine/multipletests";
 import { olsFromColumns } from "../../engine/ols";
@@ -418,6 +418,31 @@ export function runRegressionTool(
 
 // ---------------------------------------------------------------------------
 
+/**
+ * What every branch below produces, so the recording, the view and the
+ * multiple-testing block are written once rather than five times.
+ */
+interface TestComputation {
+  nullHypothesis: string;
+  statisticName: string;
+  statistic: number;
+  df: number | null;
+  pValue: number;
+  detail: string;
+  /** Label for the session test counter. */
+  label: string;
+  /** Extra rows for the workspace table, above the statistic. */
+  rows?: { label: string; values: string[] }[];
+  /** Appended to the summary, for caveats the reader has to see. */
+  caution?: string;
+}
+
+type Failure = { ok: false; error: string; hint: string; valid?: unknown };
+
+function isFailure<T>(value: T | Failure): value is Failure {
+  return typeof value === "object" && value !== null && (value as Failure).ok === false;
+}
+
 export function hypothesisTestTool(
   numericColumns: string[],
   categoryColumns: string[],
@@ -426,7 +451,7 @@ export function hypothesisTestTool(
   return defineTool({
     name: "hypothesis_test",
     description:
-      "Runs a named statistical test and states the null hypothesis in words alongside the statistic, degrees of freedom and p-value, with the decision at both the naive threshold and the session-adjusted one. one_sample_t asks whether a column's mean differs from a value. two_sample_t is Welch's test and does not assume equal variances: pass group_column with group_a and group_b to split one measurement by a category, which is the usual case, or other_column to compare two different measurements. paired_t tests the mean of the row-by-row difference and needs the two columns aligned on the same rows. jarque_bera tests normality. Every call adds to the session test counter.",
+      "Runs a named statistical test, states the null hypothesis in words, and reports the statistic, degrees of freedom and p-value with the decision at both the naive threshold and the session-adjusted one. one_sample_t: does a column's mean differ from a value. two_sample_t: Welch's test, comparing one measurement across two groups (pass group_column with group_a and group_b) or two different measurements (pass other_column). anova: one-way F test comparing a measurement across ALL groups of a categorical column at once - use this instead of running every pair through two_sample_t, which inflates the error rate. chi_square: are two categorical columns independent. paired_t: is the mean row-by-row difference zero. jarque_bera: is a column normally distributed. Every call adds to the session test counter.",
     inputSchema: hypothesisTestSchema(numericColumns, categoryColumns, categoryLabels),
     annotations: { readOnlyHint: true },
     run: (input, ctx): ToolOutcome => {
@@ -437,9 +462,10 @@ export function hypothesisTestTool(
       if (malformed) return malformed;
 
       const test = readString(input, "test");
-      const columnName = readString(input, "column");
-      const validTests = ["one_sample_t", "two_sample_t", "paired_t", "jarque_bera"];
-
+      const validTests = [
+        "one_sample_t", "two_sample_t", "paired_t",
+        "jarque_bera", "anova", "chi_square",
+      ];
       if (!test || !validTests.includes(test)) {
         return {
           ok: false,
@@ -448,134 +474,315 @@ export function hypothesisTestTool(
           valid: validTests,
         };
       }
-      if (!columnName || !frame.columns[columnName]) {
+
+      /** A categorical column with its labels, or a teaching failure. */
+      const categorical = (
+        key: string,
+      ): { name: string; labels: string[]; values: string[] } | Failure => {
+        const name = readString(input, key);
+        if (!name) {
+          return {
+            ok: false,
+            error: `${key} is required for ${test}`,
+            hint: "Name a column of labels, not measurements.",
+            valid: categoryColumns,
+          };
+        }
+        const column = frame.columns[name];
+        if (!column || column.kind !== "category" || !column.labels) {
+          return {
+            ok: false,
+            error: `"${name}" is not a categorical column`,
+            hint: `${key} has to be a column of labels. This dataset's categorical columns are listed.`,
+            valid: categoryColumns,
+          };
+        }
         return {
-          ok: false,
-          error: `column "${columnName}" does not exist`,
-          hint: "Name a column from the current dataset.",
-          valid: frame.columnOrder,
+          name,
+          labels: column.labels,
+          values: [...new Set(column.labels.filter((l) => l !== ""))].sort(),
         };
-      }
+      };
 
-      const primary = frame.columns[columnName];
-      const otherName = readString(input, "other_column");
+      const computed = ((): TestComputation | Failure => {
+        // ---- chi_square: two categorical columns, no measurement -----------
+        if (test === "chi_square") {
+          const first = categorical("group_column");
+          if (isFailure(first)) return first;
+          const second = categorical("second_group_column");
+          if (isFailure(second)) return second;
 
-      let nullHypothesis: string;
-      let statisticName: string;
-      let statistic: number;
-      let df: number | null;
-      let pValue: number;
-      let detail: string;
+          if (first.name === second.name) {
+            return {
+              ok: false,
+              error: `group_column and second_group_column are both "${first.name}"`,
+              hint: "A column is perfectly dependent on itself. Name two different categorical columns.",
+              valid: categoryColumns,
+            };
+          }
 
-      if (test === "jarque_bera") {
-        const jb = jarqueBera(primary.values);
-        nullHypothesis = `H0: ${columnName} is drawn from a normal distribution.`;
-        statisticName = "JB";
-        statistic = jb.statistic;
-        df = 2;
-        pValue = chi2UpperTailP(jb.statistic, 2);
-        detail = `skew=${fmt(jb.skewness, 3)} excess kurtosis=${fmt(jb.excessKurtosis, 3)} n=${jb.n}`;
-      } else if (test === "one_sample_t") {
-        const values = finiteValues(primary.values);
-        if (values.length < 3) {
+          const rowLabels = first.values;
+          const colLabels = second.values;
+          if (rowLabels.length < 2 || colLabels.length < 2) {
+            return {
+              ok: false,
+              error: `a contingency test needs at least two categories in each column (${first.name} has ${rowLabels.length}, ${second.name} has ${colLabels.length})`,
+              hint: "Pick columns that actually vary.",
+            };
+          }
+
+          const observed = rowLabels.map(() => colLabels.map(() => 0));
+          let total = 0;
+          for (let i = 0; i < frame.nRows; i++) {
+            const r = rowLabels.indexOf(first.labels[i]);
+            const c = colLabels.indexOf(second.labels[i]);
+            if (r < 0 || c < 0) continue;
+            observed[r][c]++;
+            total++;
+          }
+          if (total === 0) {
+            return {
+              ok: false,
+              error: "no rows have both labels present",
+              hint: "The two columns do not overlap in this sample window.",
+            };
+          }
+
+          const rowTotals = observed.map((row) => row.reduce((a, b) => a + b, 0));
+          const colTotals = colLabels.map((_, c) =>
+            observed.reduce((sum, row) => sum + row[c], 0),
+          );
+
+          let statistic = 0;
+          let smallestExpected = Infinity;
+          for (let r = 0; r < rowLabels.length; r++) {
+            for (let c = 0; c < colLabels.length; c++) {
+              const expected = (rowTotals[r] * colTotals[c]) / total;
+              if (expected < smallestExpected) smallestExpected = expected;
+              if (expected > 0) {
+                statistic += (observed[r][c] - expected) ** 2 / expected;
+              }
+            }
+          }
+
+          const df = (rowLabels.length - 1) * (colLabels.length - 1);
           return {
-            ok: false,
-            error: `${columnName} has only ${values.length} finite values in this window`,
-            hint: "Widen the sample window, or pick a column with less warm-up.",
-          };
-        }
-        const mu = readNumber(input, "mu") ?? 0;
-        const m = mean(values);
-        const sd = standardDeviation(values);
-        const se = sd / Math.sqrt(values.length);
-        statistic = (m - mu) / se;
-        df = values.length - 1;
-        pValue = studentTTwoSidedP(statistic, df);
-        nullHypothesis = `H0: the mean of ${columnName} equals ${mu}.`;
-        statisticName = "t";
-        detail = `mean=${fmt(m, 6)} sd=${fmt(sd, 6)} se=${fmt(se, 6)} n=${values.length}`;
-      } else if (test === "two_sample_t" && readString(input, "group_column")) {
-        // Split one measurement by a categorical column. This is what makes the
-        // tool usable on any dataset with a factor rather than only on datasets
-        // that happen to hold two comparable measurements side by side.
-        const groupName = readString(input, "group_column") as string;
-        const group = frame.columns[groupName];
-
-        if (!group || group.kind !== "category" || !group.labels) {
-          return {
-            ok: false,
-            error: `"${groupName}" is not a categorical column`,
-            hint: "group_column has to be a column of labels, not measurements.",
-            valid: frame.columnOrder.filter((n) => frame.columns[n].kind === "category"),
-          };
-        }
-
-        const labels = group.labels;
-        const available = [...new Set(labels.filter((l) => l !== ""))].sort();
-        const groupA = readString(input, "group_a");
-        const groupB = readString(input, "group_b");
-
-        if (!groupA || !groupB) {
-          return {
-            ok: false,
-            error: "group_a and group_b are both required when group_column is given",
-            hint: `Name the two groups of ${groupName} to compare.`,
-            valid: available,
-          };
-        }
-        if (groupA === groupB) {
-          return {
-            ok: false,
-            error: `group_a and group_b are both "${groupA}"`,
-            hint: "Comparing a group with itself has no null hypothesis. Pick two different groups.",
-            valid: available,
-          };
-        }
-        const unknown = [groupA, groupB].filter((g) => !available.includes(g));
-        if (unknown.length > 0) {
-          return {
-            ok: false,
-            error: `${groupName} has no group called ${unknown.map((u) => `"${u}"`).join(" or ")}`,
-            hint: "Group labels are case sensitive. describe_dataset lists the column.",
-            valid: available,
+            nullHypothesis: `H0: ${first.name} and ${second.name} are independent.`,
+            statisticName: "chi-square",
+            statistic,
+            df,
+            pValue: chi2UpperTailP(statistic, df),
+            detail: `${total} rows, ${rowLabels.length}x${colLabels.length} table`,
+            label: `chi_square:${first.name}x${second.name}`,
+            rows: rowLabels.map((label, r) => ({
+              label,
+              values: [...observed[r].map(String), String(rowTotals[r])],
+            })),
+            caution:
+              smallestExpected < 5
+                ? `The smallest expected count is ${fmt(smallestExpected, 1)}. Below about 5 the chi-square approximation is unreliable, so treat this p-value as indicative rather than exact.`
+                : undefined,
           };
         }
 
-        const sampleA: number[] = [];
-        const sampleB: number[] = [];
-        for (let i = 0; i < frame.nRows; i++) {
-          const value = primary.values[i];
-          if (!Number.isFinite(value)) continue;
-          if (labels[i] === groupA) sampleA.push(value);
-          else if (labels[i] === groupB) sampleB.push(value);
-        }
-
-        if (sampleA.length < 3 || sampleB.length < 3) {
+        // Everything else needs a measurement column.
+        const columnName = readString(input, "column");
+        if (!columnName || !frame.columns[columnName]) {
           return {
             ok: false,
-            error: `too few complete observations: ${groupA} has ${sampleA.length}, ${groupB} has ${sampleB.length}`,
-            hint: "Each group needs at least 3 rows where the measurement is present.",
+            error: `column "${columnName}" does not exist`,
+            hint: "Name a numeric column from the current dataset.",
+            valid: numericColumns,
+          };
+        }
+        const primary = frame.columns[columnName];
+
+        // ---- jarque_bera ---------------------------------------------------
+        if (test === "jarque_bera") {
+          const jb = jarqueBera(primary.values);
+          return {
+            nullHypothesis: `H0: ${columnName} is drawn from a normal distribution.`,
+            statisticName: "JB",
+            statistic: jb.statistic,
+            df: 2,
+            pValue: chi2UpperTailP(jb.statistic, 2),
+            detail: `skew=${fmt(jb.skewness, 3)} excess kurtosis=${fmt(jb.excessKurtosis, 3)} n=${jb.n}`,
+            label: `jarque_bera:${columnName}`,
           };
         }
 
-        const meanA = mean(sampleA);
-        const meanB = mean(sampleB);
-        const varA = standardDeviation(sampleA) ** 2 / sampleA.length;
-        const varB = standardDeviation(sampleB) ** 2 / sampleB.length;
-        statistic = (meanA - meanB) / Math.sqrt(varA + varB);
-        df =
-          (varA + varB) ** 2 /
-          (varA ** 2 / (sampleA.length - 1) + varB ** 2 / (sampleB.length - 1));
-        pValue = studentTTwoSidedP(statistic, df);
-        nullHypothesis = `H0: mean ${columnName} is the same for ${groupA} and ${groupB}.`;
-        statisticName = "t (Welch)";
-        detail = `${groupA}: mean=${fmt(meanA, 4)} n=${sampleA.length} | ${groupB}: mean=${fmt(meanB, 4)} n=${sampleB.length} | difference=${fmt(meanA - meanB, 4)}`;
-      } else {
+        // ---- one_sample_t --------------------------------------------------
+        if (test === "one_sample_t") {
+          const values = finiteValues(primary.values);
+          if (values.length < 3) {
+            return {
+              ok: false,
+              error: `${columnName} has only ${values.length} finite values in this window`,
+              hint: "Widen the sample window, or pick a column with less warm-up.",
+            };
+          }
+          const mu = readNumber(input, "mu") ?? 0;
+          const m = mean(values);
+          const sd = standardDeviation(values);
+          const se = sd / Math.sqrt(values.length);
+          const statistic = (m - mu) / se;
+          const df = values.length - 1;
+          return {
+            nullHypothesis: `H0: the mean of ${columnName} equals ${mu}.`,
+            statisticName: "t",
+            statistic,
+            df,
+            pValue: studentTTwoSidedP(statistic, df),
+            detail: `mean=${fmt(m, 6)} sd=${fmt(sd, 6)} se=${fmt(se, 6)} n=${values.length}`,
+            label: `one_sample_t:${columnName}`,
+          };
+        }
+
+        // ---- anova: one measurement across every group ---------------------
+        if (test === "anova") {
+          const group = categorical("group_column");
+          if (isFailure(group)) return group;
+
+          const samples: { label: string; values: number[] }[] = [];
+          for (const label of group.values) {
+            const values: number[] = [];
+            for (let i = 0; i < frame.nRows; i++) {
+              if (group.labels[i] !== label) continue;
+              const v = primary.values[i];
+              if (Number.isFinite(v)) values.push(v);
+            }
+            if (values.length >= 2) samples.push({ label, values });
+          }
+
+          if (samples.length < 2) {
+            return {
+              ok: false,
+              error: `only ${samples.length} group(s) of ${group.name} have enough data for ${columnName}`,
+              hint: "An F test needs at least two groups with two or more observations each.",
+              valid: group.values,
+            };
+          }
+
+          const total = samples.reduce((n, s) => n + s.values.length, 0);
+          const grandMean =
+            samples.reduce((sum, s) => sum + s.values.reduce((a, b) => a + b, 0), 0) / total;
+
+          let betweenSS = 0;
+          let withinSS = 0;
+          for (const sample of samples) {
+            const m = mean(sample.values);
+            betweenSS += sample.values.length * (m - grandMean) ** 2;
+            for (const v of sample.values) withinSS += (v - m) ** 2;
+          }
+
+          const dfBetween = samples.length - 1;
+          const dfWithin = total - samples.length;
+          if (dfWithin <= 0 || withinSS <= 0) {
+            return {
+              ok: false,
+              error: "the groups have no within-group variation, so an F ratio is undefined",
+              hint: "Check that the measurement actually varies inside each group.",
+            };
+          }
+
+          const statistic = (betweenSS / dfBetween) / (withinSS / dfWithin);
+          const pairs = (samples.length * (samples.length - 1)) / 2;
+
+          return {
+            nullHypothesis: `H0: mean ${columnName} is the same across all ${samples.length} groups of ${group.name}.`,
+            statisticName: "F",
+            statistic,
+            df: dfBetween,
+            pValue: fUpperTailP(statistic, dfBetween, dfWithin),
+            detail: `F(${dfBetween}, ${dfWithin}), n=${total}`,
+            label: `anova:${columnName}~${group.name}`,
+            rows: samples.map((s) => ({
+              label: s.label,
+              values: [String(s.values.length), fmt(mean(s.values), 4), fmt(standardDeviation(s.values), 4)],
+            })),
+            caution:
+              pairs > 1
+                ? `This is one test. Comparing the ${samples.length} groups pairwise instead would have been ${pairs} tests, and the session threshold would have tightened accordingly - which is the reason to prefer the omnibus test when the question is whether the groups differ at all.`
+                : undefined,
+          };
+        }
+
+        // ---- two_sample_t by group -----------------------------------------
+        if (test === "two_sample_t" && readString(input, "group_column")) {
+          const group = categorical("group_column");
+          if (isFailure(group)) return group;
+
+          const groupA = readString(input, "group_a");
+          const groupB = readString(input, "group_b");
+          if (!groupA || !groupB) {
+            return {
+              ok: false,
+              error: "group_a and group_b are both required when group_column is given",
+              hint: `Name the two groups of ${group.name} to compare, or use anova to compare all of them at once.`,
+              valid: group.values,
+            };
+          }
+          if (groupA === groupB) {
+            return {
+              ok: false,
+              error: `group_a and group_b are both "${groupA}"`,
+              hint: "Comparing a group with itself has no null hypothesis. Pick two different groups.",
+              valid: group.values,
+            };
+          }
+          const unknown = [groupA, groupB].filter((g) => !group.values.includes(g));
+          if (unknown.length > 0) {
+            return {
+              ok: false,
+              error: `${group.name} has no group called ${unknown.map((u) => `"${u}"`).join(" or ")}`,
+              hint: "Group labels are case sensitive. describe_dataset lists the column.",
+              valid: group.values,
+            };
+          }
+
+          const sampleA: number[] = [];
+          const sampleB: number[] = [];
+          for (let i = 0; i < frame.nRows; i++) {
+            const value = primary.values[i];
+            if (!Number.isFinite(value)) continue;
+            if (group.labels[i] === groupA) sampleA.push(value);
+            else if (group.labels[i] === groupB) sampleB.push(value);
+          }
+          if (sampleA.length < 3 || sampleB.length < 3) {
+            return {
+              ok: false,
+              error: `too few complete observations: ${groupA} has ${sampleA.length}, ${groupB} has ${sampleB.length}`,
+              hint: "Each group needs at least 3 rows where the measurement is present.",
+            };
+          }
+
+          const meanA = mean(sampleA);
+          const meanB = mean(sampleB);
+          const varA = standardDeviation(sampleA) ** 2 / sampleA.length;
+          const varB = standardDeviation(sampleB) ** 2 / sampleB.length;
+          const statistic = (meanA - meanB) / Math.sqrt(varA + varB);
+          const df =
+            (varA + varB) ** 2 /
+            (varA ** 2 / (sampleA.length - 1) + varB ** 2 / (sampleB.length - 1));
+
+          return {
+            nullHypothesis: `H0: mean ${columnName} is the same for ${groupA} and ${groupB}.`,
+            statisticName: "t (Welch)",
+            statistic,
+            df,
+            pValue: studentTTwoSidedP(statistic, df),
+            detail: `${groupA}: mean=${fmt(meanA, 4)} n=${sampleA.length} | ${groupB}: mean=${fmt(meanB, 4)} n=${sampleB.length} | difference=${fmt(meanA - meanB, 4)}`,
+            label: `two_sample_t:${columnName}~${group.name}`,
+          };
+        }
+
+        // ---- paired_t and two_sample_t across two columns -------------------
+        const otherName = readString(input, "other_column");
         if (!otherName || !frame.columns[otherName]) {
           return {
             ok: false,
             error: `${test} needs either group_column (to split ${columnName} by a category) or other_column (to compare two measurements), and neither was usable`,
-            hint: "For a group comparison pass group_column, group_a and group_b. For a column comparison pass other_column.",
+            hint: "For a group comparison pass group_column, group_a and group_b. For a column comparison pass other_column. To compare more than two groups at once, use anova.",
             valid: frame.columnOrder,
           };
         }
@@ -597,72 +804,98 @@ export function hypothesisTestTool(
           }
           const m = mean(differences);
           const se = standardDeviation(differences) / Math.sqrt(differences.length);
-          statistic = m / se;
-          df = differences.length - 1;
-          pValue = studentTTwoSidedP(statistic, df);
-          nullHypothesis = `H0: the mean of (${columnName} - ${otherName}) is zero.`;
-          statisticName = "t";
-          detail = `mean difference=${fmt(m, 6)} se=${fmt(se, 6)} n=${differences.length}`;
-        } else {
-          const a = finiteValues(primary.values);
-          const b = finiteValues(other.values);
-          if (a.length < 3 || b.length < 3) {
-            return {
-              ok: false,
-              error: "both columns need at least 3 finite values",
-              hint: "Widen the sample window.",
-            };
-          }
-          const ma = mean(a);
-          const mb = mean(b);
-          const va = standardDeviation(a) ** 2 / a.length;
-          const vb = standardDeviation(b) ** 2 / b.length;
-          statistic = (ma - mb) / Math.sqrt(va + vb);
-          // Welch-Satterthwaite.
-          df =
-            (va + vb) ** 2 /
-            (va ** 2 / (a.length - 1) + vb ** 2 / (b.length - 1));
-          pValue = studentTTwoSidedP(statistic, df);
-          nullHypothesis = `H0: ${columnName} and ${otherName} have the same mean.`;
-          statisticName = "t (Welch)";
-          detail = `mean ${columnName}=${fmt(ma, 6)} (n=${a.length}), mean ${otherName}=${fmt(mb, 6)} (n=${b.length})`;
+          const statistic = m / se;
+          const df = differences.length - 1;
+          return {
+            nullHypothesis: `H0: the mean of (${columnName} - ${otherName}) is zero.`,
+            statisticName: "t",
+            statistic,
+            df,
+            pValue: studentTTwoSidedP(statistic, df),
+            detail: `mean difference=${fmt(m, 6)} se=${fmt(se, 6)} n=${differences.length}`,
+            label: `paired_t:${columnName}-${otherName}`,
+          };
         }
-      }
 
-      ctx.recordTest(`${test}:${columnName}`, pValue);
+        const a = finiteValues(primary.values);
+        const b = finiteValues(other.values);
+        if (a.length < 3 || b.length < 3) {
+          return {
+            ok: false,
+            error: "both columns need at least 3 finite values",
+            hint: "Widen the sample window.",
+          };
+        }
+        const ma = mean(a);
+        const mb = mean(b);
+        const va = standardDeviation(a) ** 2 / a.length;
+        const vb = standardDeviation(b) ** 2 / b.length;
+        const statistic = (ma - mb) / Math.sqrt(va + vb);
+        const df =
+          (va + vb) ** 2 / (va ** 2 / (a.length - 1) + vb ** 2 / (b.length - 1));
+
+        return {
+          nullHypothesis: `H0: ${columnName} and ${otherName} have the same mean.`,
+          statisticName: "t (Welch)",
+          statistic,
+          df,
+          pValue: studentTTwoSidedP(statistic, df),
+          detail: `mean ${columnName}=${fmt(ma, 6)} (n=${a.length}), mean ${otherName}=${fmt(mb, 6)} (n=${b.length})`,
+          label: `two_sample_t:${columnName}-${otherName}`,
+        };
+      })();
+
+      if (isFailure(computed)) return computed;
+
+      ctx.recordTest(computed.label, computed.pValue);
       const summary = getTestingSummary();
-      const verdict = judge(pValue, summary);
+      const verdict = judge(computed.pValue, summary);
 
       useWorkspace.getState().setView({
         kind: "dataset",
-        title: `hypothesis_test: ${test}`,
-        headers: ["quantity", "value"],
+        title: `${test}: ${computed.nullHypothesis}`,
+        headers:
+          test === "chi_square"
+            ? ["group", "observed counts by category", "", "total"].slice(0, (computed.rows?.[0]?.values.length ?? 1) + 1)
+            : test === "anova"
+              ? ["group", "n", "mean", "sd"]
+              : ["quantity", "value"],
         rows: [
-          { label: "null hypothesis", values: [nullHypothesis] },
-          { label: statisticName, values: [fmt(statistic, 4)] },
-          { label: "df", values: [df === null ? "-" : fmt(df, 2)] },
-          { label: "p", values: [fmt(pValue, 5)] },
+          ...(computed.rows ?? []),
+          { label: computed.statisticName, values: [fmt(computed.statistic, 4)] },
+          { label: "df", values: [computed.df === null ? "-" : fmt(computed.df, 2)] },
+          { label: "p", values: [fmt(computed.pValue, 5)] },
           { label: "naive alpha 0.05", values: [verdict.naive] },
-          { label: `Bonferroni ${fmt(summary.bonferroniAlpha, 5)}`, values: [verdict.bonferroni] },
+          {
+            label: `Bonferroni ${fmt(summary.bonferroniAlpha, 5)}`,
+            values: [verdict.bonferroni],
+          },
         ],
-        note: detail,
+        note: computed.detail,
       });
 
       return {
         ok: true,
         summary: [
-          nullHypothesis,
-          `${statisticName}=${fmt(statistic, 4)}${df === null ? "" : ` df=${fmt(df, 2)}`} p=${fmt(pValue, 5)}`,
-          detail,
-          formatMultipleTestingBlock(pValue, summary),
-        ].join("\n"),
+          computed.nullHypothesis,
+          `${computed.statisticName}=${fmt(computed.statistic, 4)}${computed.df === null ? "" : ` df=${fmt(computed.df, 2)}`} p=${fmt(computed.pValue, 5)}`,
+          computed.detail,
+          computed.caution ?? "",
+          formatMultipleTestingBlock(computed.pValue, summary),
+        ]
+          .filter(Boolean)
+          .join("\n"),
         structured: {
-          test, column: columnName, statistic, df, p_value: pValue,
-          naive: verdict.naive, bonferroni: verdict.bonferroni,
+          test,
+          statistic: computed.statistic,
+          df: computed.df,
+          p_value: computed.pValue,
+          naive: verdict.naive,
+          bonferroni: verdict.bonferroni,
           tests_run: summary.testsRun,
         },
-        pValue,
-        digest: `${test} on ${columnName}: p=${fmt(pValue, 4)} (${verdict.bonferroni} after adjustment)`,
+        pValue: computed.pValue,
+        digest: `${test}: p=${fmt(computed.pValue, 4)} (${verdict.bonferroni} after adjustment)`,
         next: ["record_finding", "run_regression", "build_report"],
       };
     },

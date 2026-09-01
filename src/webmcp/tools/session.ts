@@ -222,9 +222,39 @@ export async function loadDatasetById(
       };
 }
 
-/** Choose the data matching a plain-language question without exposing IDs. */
+/**
+ * Choose the data matching a plain-language question without exposing IDs.
+ *
+ * When nothing matches, this asks rather than guessing. The router used to fall
+ * back to the equity panel silently, so "does higher education spending improve
+ * test scores" quietly loaded 135,534 rows of industry returns and said nothing
+ * to the person who typed it. On a bench whose whole claim is that an agent's
+ * numbers should be checkable, quietly substituting the wrong data is the one
+ * failure that cannot be allowed to be quiet.
+ */
 export async function loadDatasetForQuestion(question: string): Promise<ToolOutcome> {
   const route = routedDataset(question, DATASETS);
+
+  if (route.fallback) {
+    return {
+      ok: true,
+      summary: [
+        "NO DATA LOADED. Nothing in the bundled data clearly matches that question, and guessing would be worse than asking.",
+        "Available:",
+        ...DATASETS.map((d) => `  ${d.id} [${d.domain}] - ${d.description.split(".")[0]}.`),
+        "Pick one with load_dataset if it can answer the question. If none can, say so plainly rather than analysing whatever is nearest.",
+      ].join("\n"),
+      structured: {
+        dataset: null,
+        routed: false,
+        reason: "no domain-specific terms matched",
+        available: DATASETS.map((d) => ({ id: d.id, domain: d.domain })),
+      },
+      digest: "no dataset matched the question",
+      next: ["load_dataset", "list_datasets"],
+    };
+  }
+
   return loadDatasetById(route.datasetId, {}, route);
 }
 

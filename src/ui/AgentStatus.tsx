@@ -27,8 +27,8 @@ export function AgentStatus() {
       className="flex items-center gap-2.5 px-3 h-7 rounded border border-hair bg-panel"
       title={
         connected
-          ? `Agent connected. ${tools.length} available actions.`
-          : "No agent connected."
+          ? `An agent is connected through WebMCP and can call ${tools.length} tools on this page right now.`
+          : "No agent connected. This page registers its tools through WebMCP; open it in ChatGPT or in Chrome with WebMCP enabled."
       }
     >
       <span
@@ -36,9 +36,9 @@ export function AgentStatus() {
           connected ? "bg-pos" : "bg-ink3"
         }`}
       />
-      <span className="label !text-ink3">Session</span>
+      <span className="label !text-ink3">Agent</span>
       <span className="text-[12px] text-ink2">
-        {connected ? "live" : "local"}
+        {connected ? "connected" : "not connected"}
       </span>
       <span className="w-px h-3.5 bg-hair2" />
       <span
@@ -49,7 +49,7 @@ export function AgentStatus() {
         {tools.length}
       </span>
       <span className="text-[12px] text-ink3">
-        {tools.length === 1 ? "action" : "actions"}
+        {tools.length === 1 ? "capability" : "capabilities"}
       </span>
     </div>
   );

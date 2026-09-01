@@ -168,12 +168,24 @@ export function hypothesisTestSchema(
   categoryColumns: string[],
   categoryLabels: string[],
 ): JsonSchema {
+  const hasCategories = categoryColumns.length > 0;
+
   const properties: Record<string, unknown> = {
     test: enumOf(
-      ["one_sample_t", "two_sample_t", "paired_t", "jarque_bera"],
-      "one_sample_t: is the mean of a column different from a value. two_sample_t: do two groups or two columns have different means (Welch, unequal variances). paired_t: is the mean difference between two aligned columns zero. jarque_bera: is a column normally distributed.",
+      [
+        "one_sample_t",
+        "two_sample_t",
+        "paired_t",
+        "jarque_bera",
+        ...(hasCategories ? ["anova"] : []),
+        ...(categoryColumns.length >= 2 ? ["chi_square"] : []),
+      ],
+      "one_sample_t: is the mean of a column different from a value. two_sample_t: do two groups or two columns have different means (Welch, unequal variances). anova: does a measurement differ across ALL groups of a category at once - prefer this over repeated two_sample_t calls, which inflate the error rate. chi_square: are two categorical columns independent. paired_t: is the mean difference between two aligned columns zero. jarque_bera: is a column normally distributed.",
     ),
-    column: enumOf(numericColumns, "The measurement under test."),
+    column: enumOf(
+      numericColumns,
+      "The measurement under test. Required by every test except chi_square, which compares two categorical columns and needs no measurement.",
+    ),
     other_column: enumOf(
       numericColumns,
       "The second column. Use for paired_t, or for a two_sample_t that compares two different measurements rather than two groups.",
@@ -185,22 +197,31 @@ export function hypothesisTestSchema(
   };
 
   // Only offered when the loaded dataset actually has something to group by.
-  if (categoryColumns.length > 0) {
+  if (hasCategories) {
     properties.group_column = enumOf(
       categoryColumns,
-      "Split `column` by this categorical column instead of comparing two numeric columns. This is the usual way to run a two_sample_t.",
+      "The categorical column to group by. With two_sample_t it splits `column` between group_a and group_b; with anova it compares every group at once; with chi_square it is the first of the two factors.",
     );
     properties.group_a = enumOf(
       categoryLabels,
-      "The first group, a value from group_column.",
+      "The first group, a value from group_column. two_sample_t only.",
     );
     properties.group_b = enumOf(
       categoryLabels,
-      "The second group, a value from group_column.",
+      "The second group, a value from group_column. two_sample_t only.",
     );
   }
 
-  return { type: "object", properties, required: ["test", "column"] };
+  if (categoryColumns.length >= 2) {
+    properties.second_group_column = enumOf(
+      categoryColumns,
+      "The second factor, for chi_square. Must differ from group_column.",
+    );
+  }
+
+  // `column` is not universally required: chi_square has no measurement. Each
+  // test validates what it needs and says so if it is missing.
+  return { type: "object", properties, required: ["test"] };
 }
 
 export function runBacktestSchema(signalColumns: string[]): JsonSchema {
