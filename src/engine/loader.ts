@@ -329,6 +329,77 @@ function buildCrossSection(entry: DatasetManifestEntry, csvText: string): Frame 
 /** Identifies a frame the operator supplied rather than one we shipped. */
 export const USER_DATASET_ID = "user_data";
 
+function compact(value: number): string {
+  if (!Number.isFinite(value)) return "n/a";
+  if (Number.isInteger(value) && Math.abs(value) < 1e6) return String(value);
+  if (value !== 0 && Math.abs(value) < 1e-3) return value.toExponential(2);
+  if (Math.abs(value) >= 1e6) return value.toExponential(2);
+  return value.toFixed(Math.abs(value) < 10 ? 3 : 2);
+}
+
+/**
+ * Say what a column IS, not merely that it exists.
+ *
+ * The bundled datasets carry hand-written notes because we know what they mean.
+ * An uploaded file has none, and "Numeric column from your file" tells an agent
+ * nothing it could not see from the type. Since the tool descriptions instruct
+ * it to call describe_dataset before assuming what a column means, that note
+ * has to be worth reading.
+ *
+ * Everything here is read off the data itself rather than guessed from the
+ * name. A column of two repeated labels is a grouping; a column whose every
+ * value is distinct is naming rows; integers between 1850 and 2100 are almost
+ * certainly years; values that are only 0 and 1 are a flag and must not be
+ * averaged as though they were a measurement.
+ */
+function describeUserColumn(
+  kind: "numeric" | "category",
+  raw: string[],
+  numeric: number[],
+): string {
+  const present = raw.filter((v) => v !== "").length;
+  const missing = raw.length - present;
+  const missingNote = missing > 0 ? ` ${missing} missing.` : "";
+
+  if (kind === "category") {
+    const levels = [...new Set(raw.filter((v) => v !== ""))];
+    if (levels.length === present && present > 2) {
+      return `Labels every row distinctly (${present} values), so it identifies rows rather than grouping them. Not usable as a grouping.${missingNote}`;
+    }
+    if (levels.length <= 8) {
+      return `Grouping with ${levels.length} levels: ${levels.join(", ")}. Usable as group_column for a two-sample test, an ANOVA, or a chi-square.${missingNote}`;
+    }
+    return `Categorical with ${levels.length} distinct values, for example ${levels.slice(0, 4).join(", ")}. Too many levels for a clean group comparison.${missingNote}`;
+  }
+
+  const finite = numeric.filter(Number.isFinite);
+  if (finite.length === 0) return `No usable numeric values.${missingNote}`;
+
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  const mean = finite.reduce((a, b) => a + b, 0) / finite.length;
+  const allIntegers = finite.every((v) => Number.isInteger(v));
+  const distinct = new Set(finite);
+
+  const base = `Numeric: ${finite.length} values from ${compact(min)} to ${compact(max)}, mean ${compact(mean)}.${missingNote}`;
+
+  if (distinct.size <= 2 && [...distinct].every((v) => v === 0 || v === 1)) {
+    return `${base} Only 0 and 1, so this is a binary indicator - its mean is a proportion, not an average measurement.`;
+  }
+  if (allIntegers && min >= 1850 && max <= 2100 && distinct.size > 1) {
+    return `${base} Integers in calendar-year range, so this is very likely a year and is usable as a time trend.`;
+  }
+  if (min >= 0 && max <= 1 && !allIntegers) {
+    return `${base} Bounded in [0, 1], so it reads as a proportion or a rate rather than a raw count.`;
+  }
+  // Integrality is worth reporting as an observation; it is not worth
+  // interpreting. Whole numbers between 47 and 66 are as likely to be ages as
+  // counts, and guessing "count or percentage" is exactly the kind of invented
+  // meaning that makes a note worse than no note.
+  if (allIntegers) return `${base} All values are whole numbers.`;
+  return base;
+}
+
 const ISO_DATE = /^\d{4}-\d{1,2}-\d{1,2}/;
 
 /**
@@ -386,11 +457,16 @@ export function buildFrameFromCsv(fileName: string, csvText: string): Frame {
         labels: raw,
         derived: false,
         forwardLooking: false,
-        note: "Categorical column from your file.",
+        note: describeUserColumn("category", raw, []),
       };
       if (!labelColumn) labelColumn = name;
     } else {
-      columns[name] = makeColumn(name, raw.map(toNumber), "Numeric column from your file.");
+      const values = raw.map(toNumber);
+      columns[name] = makeColumn(
+        name,
+        values,
+        describeUserColumn("numeric", raw, values),
+      );
     }
     columnOrder.push(name);
   }
