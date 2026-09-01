@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 
-import { DATASETS, datasetDomains } from "../config";
 import { useWorkspace, type WorkspaceView } from "../state/workspace";
+import { setNextActor } from "../webmcp/tools/common";
+import { setHypothesisTool } from "../webmcp/tools/report";
 import { ApprovalCard } from "./ApprovalCard";
 import {
   BASE_PLUGINS,
@@ -94,36 +95,58 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
  * The calm starting point before data is loaded.
  */
 function EmptyState() {
+  const [question, setQuestion] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = question.trim();
+    if (!text || submitting) return;
+
+    setSubmitting(true);
+    setError(null);
+    setNextActor("human");
+
+    try {
+      const result = (await setHypothesisTool().execute({ hypothesis: text })) as {
+        isError?: boolean;
+        content?: { text?: string }[];
+      };
+      if (result.isError) setError(result.content?.[0]?.text ?? "Unable to start research.");
+    } catch {
+      setError("Unable to start research.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="h-full flex items-center justify-center py-12">
-      <div className="max-w-2xl w-full">
-        <div className="mb-8">
+      <div className="max-w-xl w-full">
+        <div className="mb-7">
           <div className="label mb-2">Research workspace</div>
-          <h1 className="text-[22px] text-ink tracking-tight">Choose a dataset to begin.</h1>
+          <h1 className="text-[22px] text-ink tracking-tight">What would you like to investigate?</h1>
         </div>
 
-        <div className="flex items-baseline gap-3 mb-3">
-          <span className="label">Bundled data</span>
-          <span className="text-[11.5px] text-ink3">
-            {datasetDomains().join(" · ")}
-          </span>
-        </div>
+        <form onSubmit={submit} className="flex gap-2">
+          <input
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Ask a research question"
+            autoFocus
+            className="flex-1 min-w-0 h-10 bg-panel border border-hair rounded px-3 text-[13px] text-ink placeholder:text-ink3 focus:outline-none focus:border-hair2"
+          />
+          <button
+            type="submit"
+            disabled={!question.trim() || submitting}
+            className="h-10 px-4 rounded bg-accent text-canvas text-[12.5px] disabled:opacity-40 hover:brightness-110 transition"
+          >
+            {submitting ? "Starting…" : "Start"}
+          </button>
+        </form>
 
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-          {DATASETS.map((d) => (
-            <li key={d.id} className="border border-hair rounded-md bg-panel px-3.5 py-3">
-              <div className="min-w-0">
-                <div className="text-[12.5px] text-ink">
-                  {d.name}
-                  <span className="text-ink3 ml-2 text-[11px]">{d.domain}</span>
-                </div>
-                <div className="text-[11.5px] text-ink3 leading-relaxed">
-                  {d.description.split(".")[0]}.
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+        {error && <p className="mt-3 text-[11.5px] text-neg">{error}</p>}
       </div>
     </div>
   );
