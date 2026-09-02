@@ -156,6 +156,19 @@ export async function loadDatasetById(
         };
       }
 
+      // Replacing loaded data with work already recorded against it is legal
+      // but never silent: the run log, the test counter and the findings all
+      // survive the swap and will otherwise be read as belonging to the new
+      // dataset.
+      const previous = useWorkspace.getState().frame;
+      const recorded = useWorkspace
+        .getState()
+        .steps.filter((s) => s.status === "ok").length;
+      const replacementWarning =
+        previous && previous.id !== entry.id && recorded > 0
+          ? `REPLACED ${previous.id} with ${entry.id}. The ${recorded} steps and ${useWorkspace.getState().findings.length} findings already recorded were produced against ${previous.id} and still say so - do not present them as results about ${entry.id}.`
+          : null;
+
       const before = availability().names;
       const frame = await loadDatasetFile(entry);
       const store = useWorkspace.getState();
@@ -201,6 +214,7 @@ export async function loadDatasetById(
       return {
         ok: true,
         summary: [
+          replacementWarning,
           routeLine,
           `Loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} columns.`,
           range ? `Dates ${range.start} to ${range.end}.` : "No date dimension.",
@@ -208,7 +222,11 @@ export async function loadDatasetById(
           `Columns: ${frame.columnOrder.join(", ")}`,
           `NOTE: ${entry.semanticNote}`,
           `TOOL SURFACE CHANGED. Now available: ${gained.join(", ")}. Their column arguments are enums of the columns above.`,
-        ].join("\n"),
+        ]
+          // routeLine and the replacement warning are both optional; without
+          // this they arrive as blank lines inside a capped payload.
+          .filter(Boolean)
+          .join("\n"),
         structured: {
           dataset: entry.id,
           selected_from_question: route !== undefined,
@@ -236,6 +254,7 @@ export async function loadDatasetForQuestion(question: string): Promise<ToolOutc
   // If the operator brought their own file, that is the data. Routing a
   // question to a bundled dataset would silently discard what they loaded.
   const current = useWorkspace.getState().frame;
+
   if (current?.id === USER_DATASET_ID) {
     return {
       ok: true,
@@ -252,6 +271,43 @@ export async function loadDatasetForQuestion(question: string): Promise<ToolOutc
       digest: `using operator data: ${current.name}`,
       next: ["describe_dataset", "summary_stats", "run_regression"],
     };
+  }
+
+  /**
+   * A later question re-routes and loads, which is the point of asking
+   * questions rather than naming datasets. Two cases must not reload, though.
+   */
+  if (current) {
+    const existing = routedDataset(question, DATASETS);
+
+    if (existing.fallback) {
+      // Nothing matched. Reloading would be a guess and clearing would be
+      // worse; the data that is here stays here.
+      return {
+        ok: true,
+        summary: [
+          `Question updated. Nothing bundled obviously matches it, so the workspace still holds ${current.id} (${current.nRows} rows).`,
+          "Answer it from this data if it can be answered, say plainly that it cannot, or call load_dataset deliberately.",
+        ].join("\n"),
+        structured: { dataset: current.id, data_changed: false, routed: false },
+        digest: "question updated, data unchanged",
+        next: ["get_state", "describe_dataset", "load_dataset"],
+      };
+    }
+
+    if (existing.datasetId === current.id) {
+      // Reloading the same file would discard every derived column built on
+      // it, silently undoing the session's work to achieve nothing.
+      return {
+        ok: true,
+        summary: `Question updated. Still working on ${current.id} (${current.nRows} rows, ${current.columnOrder.length} columns), including any columns already derived.`,
+        structured: { dataset: current.id, data_changed: false },
+        digest: "question updated",
+        next: ["describe_dataset", "run_regression", "hypothesis_test"],
+      };
+    }
+    // A genuinely different dataset: fall through and load it. loadDatasetById
+    // says loudly if that replaces data with recorded work against it.
   }
 
   const route = routedDataset(question, DATASETS);

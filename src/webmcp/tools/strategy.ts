@@ -42,12 +42,15 @@ function downsample<T>(items: T[], max: number): T[] {
   return items.filter((_, i) => i % stride === 0);
 }
 
-export function runBacktestTool(signalColumns: string[]): ToolDescriptor {
+export function runBacktestTool(
+  signalColumns: string[],
+  returnColumns: string[],
+): ToolDescriptor {
   return defineTool({
     name: "run_backtest",
     description:
       "Sorts the cross-section on a signal column each rebalance, goes long the top quantile and short the bottom in equal dollar amounts, and holds for holding_days. Returns CAGR, annualised volatility, Sharpe, maximum drawdown, turnover and hit rate, reported separately for the full period, the first 70 per cent and the last 30 per cent. The in-sample and out-of-sample split is chronological and fixed at 70/30 and cannot be changed - a split you can tune is not an out-of-sample test. A position formed on a date earns returns from the following day onward. Only derived causal columns can be signals; forward-looking columns are refused.",
-    inputSchema: runBacktestSchema(signalColumns),
+    inputSchema: runBacktestSchema(signalColumns, returnColumns),
     annotations: { readOnlyHint: true },
     run: (input): ToolOutcome => {
       const frame = getEffectiveFrame();
@@ -72,9 +75,34 @@ export function runBacktestTool(signalColumns: string[]): ToolDescriptor {
         };
       }
 
+      // The return column used to be hardcoded to `ret`, which meant the tool
+      // was offered on any panel with a signal and then failed on every panel
+      // that was not the bundled equity one - including a file the operator
+      // supplied. It is now an argument, defaulting only where it exists.
+      const requestedReturn = readString(input, "return_column");
+      const returnColumn = requestedReturn ?? (frame.columns.ret ? "ret" : null);
+      if (!returnColumn) {
+        return {
+          ok: false,
+          error: "this dataset has no column called `ret`, so the return column has to be named",
+          hint: "Pass return_column: the per-entity periodic return that a position earns. The backtester will not guess which of several numeric columns is a return.",
+          valid: frame.columnOrder.filter(
+            (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
+          ),
+        };
+      }
+      if (returnColumn === signalColumn) {
+        return {
+          ok: false,
+          error: `signal_column and return_column are both "${signalColumn}"`,
+          hint: "Sorting on the very return you are about to earn is look-ahead bias with extra steps. The signal must be knowable before the return it predicts.",
+        };
+      }
+
       const before = availability().names;
       const outcome = runBacktest(frame, {
         signalColumn,
+        returnColumn,
         holdingDays: readInteger(input, "holding_days") ?? 21,
         nQuantiles: readInteger(input, "n_quantiles") ?? 5,
         costBps: readNumber(input, "cost_bps") ?? 5,

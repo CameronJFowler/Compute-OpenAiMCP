@@ -42,6 +42,17 @@ export interface DatasetManifestEntry {
    * Hubble's column notes in an `if`, which worked exactly once.
    */
   columnNotes?: Record<string, string>;
+  /**
+   * What is wrong with this data, in its own words.
+   *
+   * build_report used to carry one hardcoded list written for the equity panel,
+   * so a report about penguins asserted that "the industry portfolio returns
+   * are value-weighted index returns". A generated report that states falsehoods
+   * about its own data is worse than one with no limitations section, and it
+   * contradicts the only thing this project claims: that the write-up is
+   * assembled from what actually happened.
+   */
+  limitations?: string[];
 }
 
 /**
@@ -59,6 +70,10 @@ export const DATASETS: DatasetManifestEntry[] = [
       "Daily value-weighted returns for 49 US industry portfolios, 2766 trading days. A panel: one row per industry per trading day, 135,534 rows. The Fama-French factors are joined on by date, so market, size and value controls are available without loading a second dataset.",
     semanticNote:
       "ret is the daily value-weighted return in decimal. close is a cumulative wealth index starting at 100, derived from ret, so that price-based transforms (momentum, realised_vol) have something to work on - it is not a traded price. mkt_rf, smb, hml and rf are the Fama-French daily factors, identical across every industry on a given date, so use them as controls and never as a cross-sectional signal.",
+    limitations: [
+      "Industry portfolio returns are value-weighted index returns, not tradeable instruments. A real implementation would face borrow costs, capacity limits and market impact that no backtest here models.",
+      "`close` is a wealth index reconstructed from `ret`, not a traded price. Treat any price-based transform as a construction rather than a market observation.",
+    ],
   },
   {
     id: "ff_factors_daily",
@@ -70,6 +85,9 @@ export const DATASETS: DatasetManifestEntry[] = [
       "Daily market, size and value factor returns plus the risk-free rate. A single time series, one row per trading day.",
     semanticNote:
       "mkt_rf is the market return in excess of the risk-free rate; smb is small minus big; hml is high minus low book-to-market; rf is the daily risk-free rate. All in decimal, converted from the published percentages. Use these as controls so a result is not just repackaged market beta.",
+    limitations: [
+      "Factor returns are constructed long-short portfolios, not instruments that can be held. Loading on a factor is not the same as being able to capture it.",
+    ],
   },
   {
     id: "climate_annual",
@@ -90,6 +108,11 @@ export const DATASETS: DatasetManifestEntry[] = [
       temp_gistemp_c:
         "Global mean surface temperature anomaly, degrees Celsius. NASA GISS Surface Temperature Analysis.",
     },
+    limitations: [
+      "CO2 is missing before 1959, so any regression involving it is fitted on the 1959-onward overlap only, whatever the stated window.",
+      "The two temperature series share input observations and are not independent estimates. Agreement between them is weaker evidence than it appears.",
+      "Annual global means say nothing about any particular place or season.",
+    ],
   },
   {
     id: "penguins",
@@ -111,6 +134,10 @@ export const DATASETS: DatasetManifestEntry[] = [
       body_mass_g: "Body mass, grams.",
       year: "Study year, 2007 to 2009.",
     },
+    limitations: [
+      "344 birds from three islands of one archipelago over three seasons. Nothing here generalises to penguins elsewhere or to other years.",
+      "Sex and a few measurements are missing for some birds; tests drop those rows rather than impute them.",
+    ],
   },
   {
     id: "hubble_1929",
@@ -127,6 +154,10 @@ export const DATASETS: DatasetManifestEntry[] = [
       distance_mpc: "Distance in megaparsecs, from Hubble's own calibration.",
       velocity_km_s: "Radial velocity in km/s, positive meaning recession.",
     },
+    limitations: [
+      "24 objects, and Hubble's distance calibration is now known to be wrong by roughly a factor of seven. Fitting this recovers what he measured, not the expansion rate of the universe.",
+      "No uncertainty on the distances is published with the table, so the standard errors describe scatter about the fit and nothing else.",
+    ],
   },
 ];
 

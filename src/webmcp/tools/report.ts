@@ -8,7 +8,8 @@
  * checked against the log rather than taken on trust.
  */
 
-import { APP_NAME } from "../../config";
+import { APP_NAME, findDataset } from "../../config";
+import { USER_DATASET_ID } from "../../engine/loader";
 import { dateRange, uniqueEntities } from "../../engine/frame";
 import { formatStep, formatTranscript } from "../../state/runlog";
 import {
@@ -170,6 +171,64 @@ export function buildReportTool(): ToolDescriptor {
 
       const successful = state.steps.filter((s) => s.status === "ok");
       const backtest = state.lastBacktest;
+      const ran = (tool: string) => successful.some((s) => s.tool === tool);
+
+      /**
+       * Method and limitations are assembled from what actually happened.
+       *
+       * Both used to be fixed prose written for the equity panel, so a report
+       * about penguins described a backtest that never ran and asserted that
+       * "the industry portfolio returns are value-weighted index returns". A
+       * generated report that states falsehoods about its own data undermines
+       * the one thing this project claims for it.
+       */
+      const methodParagraphs: string[] = [];
+      if (ran("run_regression")) {
+        methodParagraphs.push(
+          "Regressions are ordinary least squares solved by Householder QR. Standard errors are Newey-West heteroskedasticity- and autocorrelation-consistent by default, with a Bartlett kernel at bandwidth `floor(4*(n/100)^(2/9))`; the joint test is a Wald statistic built from the same robust covariance matrix, since the R-squared form is not valid under HAC.",
+        );
+      }
+      if (ran("hypothesis_test")) {
+        methodParagraphs.push(
+          "Two-sample comparisons use Welch's t test and do not assume equal variances. Where more than two groups were compared at once, a one-way F test was used in preference to repeated pairwise tests.",
+        );
+      }
+      if (ran("add_feature")) {
+        methodParagraphs.push(
+          "Derived columns are causal: a value at time t uses only data up to t. The single exception, `forward_return`, is labelled as forward-looking and is admitted as a dependent variable only - never as a regressor or a trading signal.",
+        );
+      }
+      if (ran("run_backtest")) {
+        methodParagraphs.push(
+          "The backtest forms positions from the signal known at date t and earns returns from t+1 onward. Costs are charged on turnover at each rebalance, positions are equal-weighted within quantile and dollar-neutral, and the sample is split 70/30 chronologically at a boundary that is fixed rather than chosen.",
+        );
+      }
+      if (ran("bootstrap_strategy")) {
+        methodParagraphs.push(
+          "The resampling is a stationary block bootstrap with geometric block lengths, which preserves the short-run autocorrelation of the return series that an iid bootstrap would destroy.",
+        );
+      }
+
+      const entry = findDataset(state.datasetId ?? "");
+      const limitations: string[] = [
+        ...(entry?.limitations ?? []),
+        ...(state.datasetId === USER_DATASET_ID
+          ? [
+              "This data was supplied by the operator and parsed in the browser. Its provenance, licence and accuracy were not checked by this page, and column meanings were inferred from content rather than declared.",
+            ]
+          : []),
+        ...(ran("run_backtest")
+          ? [
+              "Transaction costs are a flat charge on turnover and do not vary with liquidity or volatility.",
+              "The out-of-sample period is a single contiguous block of one history. It is a check, not a guarantee.",
+            ]
+          : []),
+        ...(state.sampleStart || state.sampleEnd
+          ? [
+              "The sample window was narrowed during the session, so results do not cover the full available history.",
+            ]
+          : []),
+      ];
 
       const markdown = [
         `# ${APP_NAME} research report`,
@@ -195,7 +254,9 @@ export function buildReportTool(): ToolDescriptor {
         "",
         "## Method",
         "",
-        "Regressions use ordinary least squares solved by Householder QR, with Newey-West heteroskedasticity- and autocorrelation-consistent standard errors by default and a Bartlett kernel at bandwidth `floor(4*(n/100)^(2/9))`. Derived columns are causal except `forward_return`, which is admitted only as a dependent variable. Backtests form positions on the signal known at date t and earn returns from t+1 onward, charge costs on turnover, and split 70/30 chronologically.",
+        methodParagraphs.length > 0
+          ? methodParagraphs.join("\n\n")
+          : "_No analysis was run in this session._",
         "",
         "## What was run",
         "",
@@ -241,17 +302,9 @@ export function buildReportTool(): ToolDescriptor {
         "",
         "## Limitations",
         "",
-        [
-          "- The industry portfolio returns are value-weighted index returns, not tradeable instruments. A real implementation would face borrow costs, capacity limits and market impact that this backtest does not model.",
-          "- Transaction costs are a flat charge on turnover and do not vary with liquidity or volatility.",
-          "- The `close` column is a wealth index reconstructed from returns, not a traded price.",
-          "- The out-of-sample period is a single contiguous block of one history. It is a check, not a guarantee.",
-          state.sampleStart || state.sampleEnd
-            ? "- The sample window was narrowed during the session, so results are not over the full available history."
-            : null,
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        limitations.length > 0
+          ? limitations.map((line) => `- ${line}`).join("\n")
+          : "_None recorded._",
         "",
         "## Conclusion",
         "",

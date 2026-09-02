@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { USER_DATASET_ID, buildFrameFromCsv } from "../src/engine/loader";
 import { useWorkspace } from "../src/state/workspace";
 import { resetHostCache } from "../src/webmcp/host";
 import { currentDescriptors, resetRegistry, syncTools } from "../src/webmcp/registry";
@@ -496,6 +497,218 @@ describe("walking back through the session", () => {
     expect(after.view.kind).toBe("empty");
     expect(after.tests).toEqual([]);
   }, 30000);
+});
+
+/**
+ * The report is the one artifact that leaves the page, and the project's claim
+ * for it is that it is assembled from what actually happened. Fixed prose
+ * written for one dataset breaks that claim the moment a second dataset exists.
+ */
+describe("the report describes the session it came from", () => {
+  const reportAfter = async (
+    datasetId: string,
+    work: () => Promise<unknown>,
+  ): Promise<string> => {
+    await call("load_dataset", { dataset_id: datasetId });
+    await work();
+    const steps = useWorkspace.getState().steps.filter((s) => s.status === "ok");
+    await call("record_finding", {
+      finding: "A finding, for the report to carry.",
+      supporting_steps: [steps[steps.length - 1].id],
+    });
+    await call("build_report", { conclusion: "A conclusion." });
+    return useWorkspace.getState().report ?? "";
+  };
+
+  it("does not claim finance limitations for a biology dataset", async () => {
+    const markdown = await reportAfter("penguins", () =>
+      call("hypothesis_test", {
+        test: "anova", column: "body_mass_g", group_column: "species",
+      }),
+    );
+
+    // The old fixed list asserted all of these about whatever was loaded.
+    expect(markdown).not.toContain("industry portfolio");
+    expect(markdown).not.toContain("value-weighted");
+    expect(markdown).not.toContain("wealth index");
+    expect(markdown).not.toContain("Transaction costs");
+
+    // And says what is actually true of these data.
+    expect(markdown).toContain("three islands of one archipelago");
+  }, 40000);
+
+  it("carries the finance limitations when the data is financial", async () => {
+    const markdown = await reportAfter("industries_daily", () =>
+      call("run_regression", { dependent: "ret", independent: ["mkt_rf"] }),
+    );
+    expect(markdown).toContain("not tradeable instruments");
+    expect(markdown).toContain("wealth index reconstructed");
+    // No backtest ran, so no cost model to caveat.
+    expect(markdown).not.toContain("Transaction costs");
+  }, 40000);
+
+  it("describes only the methods that were actually used", async () => {
+    const markdown = await reportAfter("penguins", () =>
+      call("hypothesis_test", {
+        test: "two_sample_t", column: "body_mass_g",
+        group_column: "species", group_a: "Adelie", group_b: "Gentoo",
+      }),
+    );
+
+    expect(markdown).toContain("Welch");
+    // Nothing was regressed, derived, backtested or resampled.
+    expect(markdown).not.toContain("Householder QR");
+    expect(markdown).not.toContain("forward_return");
+    expect(markdown).not.toContain("block bootstrap");
+    expect(markdown).not.toContain("70/30");
+  }, 40000);
+});
+
+describe("backtesting a panel that is not the bundled one", () => {
+  /** A synthetic long panel with no column called `ret`. */
+  const panelCsv = () => {
+    const rows = ["date,site,level"];
+    for (let d = 0; d < 320; d++) {
+      const date = new Date(Date.UTC(2020, 0, 1) + d * 86400000)
+        .toISOString()
+        .slice(0, 10);
+      for (const [i, site] of ["north", "south", "east", "west"].entries()) {
+        rows.push(`${date},${site},${(100 + i * 10 + Math.sin(d / 9 + i) * 5).toFixed(3)}`);
+      }
+    }
+    return rows.join("\n");
+  };
+
+  const loadPanel = async () => {
+    const frame = buildFrameFromCsv("sites.csv", panelCsv());
+    useWorkspace.getState().loadFrame(frame, USER_DATASET_ID, "sites.csv");
+    await syncTools();
+    await call("add_feature", {
+      transform: "momentum", source_column: "level", window: 60,
+    });
+  };
+
+  it("asks which column is the return instead of failing on a missing `ret`", async () => {
+    await loadPanel();
+    expect(toolNames()).toContain("run_backtest");
+
+    const result = await call("run_backtest", {
+      signal_column: "level_mom60", holding_days: 21,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("has no column called `ret`");
+    expect(result.text).toContain("return_column");
+    // And it names the columns that could be one.
+    expect(result.text).toContain("level");
+  }, 40000);
+
+  it("runs once the return column is named", async () => {
+    await loadPanel();
+    await call("add_feature", {
+      transform: "log_return", source_column: "level",
+    });
+
+    const result = await call("run_backtest", {
+      signal_column: "level_mom60",
+      return_column: "level_logret",
+      holding_days: 21,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("IN (70%)");
+    expect(result.text).toContain("OUT (30%)");
+    expect(toolNames()).toContain("bootstrap_strategy");
+  }, 40000);
+
+  it("refuses to sort on the very return it is about to earn", async () => {
+    await loadPanel();
+    const result = await call("run_backtest", {
+      signal_column: "level_mom60",
+      return_column: "level_mom60",
+      holding_days: 21,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("look-ahead bias with extra steps");
+  }, 40000);
+});
+
+/**
+ * Findings, the run log and the test counter all survive a dataset change. If
+ * the data can be swapped silently, a finding citing step 3 ends up printed in
+ * a report about a dataset step 3 never touched.
+ */
+describe("changing dataset mid-session", () => {
+  it("re-routes on a new question, but never silently", async () => {
+    await call("set_hypothesis", {
+      hypothesis: "Do Adelie and Gentoo penguins differ in body mass?",
+    });
+    await call("hypothesis_test", {
+      test: "two_sample_t", column: "body_mass_g",
+      group_column: "species", group_a: "Adelie", group_b: "Gentoo",
+    });
+
+    const result = await call("set_hypothesis", {
+      hypothesis: "Does industry momentum survive out of sample transaction costs?",
+    });
+
+    // Asking a new question moves the data - that is the design.
+    expect(useWorkspace.getState().datasetId).toBe("industries_daily");
+    // But the record from the previous dataset survives, so it is flagged.
+    expect(result.text).toContain("REPLACED penguins with industries_daily");
+  }, 40000);
+
+  it("does not reload, and so does not discard derived columns, on the same data", async () => {
+    await call("set_hypothesis", {
+      hypothesis: "How much of global temperature variation is explained by CO2?",
+    });
+    expect(useWorkspace.getState().datasetId).toBe("climate_annual");
+
+    const feature = await call("add_feature", {
+      transform: "lag", source_column: "temp_gcag_c", window: 1,
+    });
+    expect(feature.isError).toBe(false);
+    expect(useWorkspace.getState().frame?.columnOrder).toContain("temp_gcag_c_lag1");
+
+    const result = await call("set_hypothesis", {
+      hypothesis: "Has the rate of warming changed in recent decades?",
+    });
+
+    expect(result.text).toContain("Still working on climate_annual");
+    // A reload would silently have thrown the derived column away.
+    expect(useWorkspace.getState().frame?.columnOrder).toContain("temp_gcag_c_lag1");
+  }, 40000);
+
+  it("keeps the loaded data when a later question matches nothing", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    const result = await call("set_hypothesis", {
+      hypothesis: "Does higher education spending improve student test scores?",
+    });
+
+    expect(result.text).toContain("still holds penguins");
+    expect(useWorkspace.getState().datasetId).toBe("penguins");
+  }, 40000);
+
+  it("warns loudly when a deliberate load replaces data with recorded work", async () => {
+    await call("load_dataset", { dataset_id: "penguins" });
+    await call("hypothesis_test", {
+      test: "anova", column: "body_mass_g", group_column: "species",
+    });
+
+    const result = await call("load_dataset", { dataset_id: "climate_annual" });
+
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("REPLACED penguins with climate_annual");
+    expect(result.text).toContain("do not present them as results about");
+    // The swap is allowed; it is just not silent.
+    expect(useWorkspace.getState().datasetId).toBe("climate_annual");
+  }, 40000);
+
+  it("says nothing about replacement on a first load", async () => {
+    const result = await call("load_dataset", { dataset_id: "penguins" });
+    expect(result.text).not.toContain("REPLACED");
+    expect(result.text.split("\n").filter((l) => l === "")).toHaveLength(0);
+  }, 40000);
 });
 
 describe("the human grabbing the wheel", () => {

@@ -224,13 +224,20 @@ export function hypothesisTestSchema(
   return { type: "object", properties, required: ["test"] };
 }
 
-export function runBacktestSchema(signalColumns: string[]): JsonSchema {
+export function runBacktestSchema(
+  signalColumns: string[],
+  returnColumns: string[],
+): JsonSchema {
   return {
     type: "object",
     properties: {
       signal_column: enumOf(
         signalColumns,
         "The column to sort the cross-section on. Only derived, causal columns appear here: raw data columns and forward-looking columns are excluded because neither can be a tradeable signal.",
+      ),
+      return_column: enumOf(
+        returnColumns,
+        "The per-entity periodic return that positions earn. Defaults to `ret` when the dataset has one. On any other panel - including a file you supplied - name it explicitly, because the backtester cannot guess which column is a return.",
       ),
       holding_days: {
         type: "integer",

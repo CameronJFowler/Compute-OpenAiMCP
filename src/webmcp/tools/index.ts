@@ -76,7 +76,9 @@ export function buildToolSet(): ToolDescriptor[] {
     buildReportTool(),
   );
 
-  if (surface.hasSignal) tools.push(runBacktestTool(signalColumnNames()));
+  if (surface.hasSignal) {
+    tools.push(runBacktestTool(signalColumnNames(), regressors));
+  }
   if (surface.hasBacktest) tools.push(bootstrapStrategyTool());
 
   return tools;
