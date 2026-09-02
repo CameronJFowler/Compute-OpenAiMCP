@@ -1,0 +1,42 @@
+# Typecheck, test and build on every push.
+#
+# Deployment is handled by Netlify, which builds from this repository directly.
+# This workflow deliberately does not deploy: it exists so that the test suite
+# runs in public, on a clean machine, against a clean install - which is the
+# only version of "212 tests pass" that anyone else can verify.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npx vite build
