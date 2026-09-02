@@ -6,18 +6,27 @@
     <meta name="color-scheme" content="dark" />
     <meta
       name="description"
-      content="A quantitative research bench that a human and an agent operate together."
+      content="A research bench where you can check the agent's work. Regression, group comparisons and resampling, computed in the page, driven by you or by an agent through WebMCP."
     />
 
     <!--
       WebMCP origin trial token.
 
-      Uncomment and paste the token issued for this deployment origin so the
-      page exposes tools in stock Chrome with no chrome://flags step. The token
-      is bound to the origin, so the deployed Netlify origin and localhost need
-      separate tokens.
+      This is what lets the page register its tools in stock Chrome with no
+      chrome://flags step, which is the difference between a judge seeing the
+      agent side of this project and not.
+
+      Bound to https://computeopenai.netlify.app, feature WebMCP, expires
+      2026-11-17. It is a public artifact, not a secret: it authorises this
+      origin to use a trial feature and nothing else.
+
+      localhost is a different origin and is not covered. For local work use
+      edge://flags or chrome://flags and search for webmcp.
     -->
-    <!-- <meta http-equiv="origin-trial" content="REPLACE_WITH_ORIGIN_TRIAL_TOKEN" /> -->
+    <meta
+      http-equiv="origin-trial"
+      content="Am4aPTnDySow7BgMhUIOMeZJLKc70+//mgW7rvRZ2A+WOFdMsZvmSIWEhm9++oiXpTTAqFUmaGNj+rN1x4tNDgwAAABZeyJvcmlnaW4iOiJodHRwczovL2NvbXB1dGVvcGVuYWkubmV0bGlmeS5hcHA6NDQzIiwiZmVhdHVyZSI6IldlYk1DUCIsImV4cGlyeSI6MTc5NDg3MzYwMH0="
+    />
 
     <title>Compute</title>
   </head>
