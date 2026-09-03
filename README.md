@@ -98,6 +98,22 @@ The header chip turns green and the capability count starts moving when the agen
 
 The page shows `not attached` if no host is present, and the capability count still describes what the page offers — so it's easy to tell whether the agent is actually running tools or just talking about it.
 
+## What the analysis shows
+
+As soon as a question is asked, the page runs an automatic analysis pipeline and generates a full report — no extra tool calls needed from the agent.
+
+**Industry momentum (2015–2025):**  
+Ask *"Does industry momentum survive out of sample and transaction costs?"* The app creates a 252-day momentum signal, runs a 70/30 train/test backtest with transaction costs, and fits a three-factor regression. On the 2015–2025 sample, momentum **degrades out of sample** — strong in-sample Sharpe, much weaker in the holdout period, largely because of the 2020 COVID momentum crash and the 2022 value/momentum reversal. The regression confirms high market beta (~0.95) and positive SMB/HML loadings.
+
+**Penguin species (body mass):**  
+Ask *"Do Adelie and Gentoo penguins differ in body mass?"* The app runs an ANOVA across species, then fits a regression of body mass on flipper length and bill dimensions. The groups differ significantly — the p-value survives the session-adjusted Bonferroni threshold.
+
+**Climate:**  
+Ask *"How much of global warming is explained by CO₂?"* The regression of temperature anomaly on CO₂ concentration explains roughly 90% of the variance (R² ≈ 0.90).
+
+**Hubble 1929:**  
+Ask *"Recover Hubble's constant from his original data."* The regression slope gives ~450 km/s/Mpc — Hubble's original estimate, roughly 6× the modern value due to distance calibration errors in Cepheid variable stars.
+
 ## Deploying
 
 Static bundle, no backend. Anything that serves files works.

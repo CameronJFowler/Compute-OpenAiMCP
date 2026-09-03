@@ -1,104 +1,117 @@
-# Compute — WebMCP Hackathon Submission
+# Compute — OpenAI WebMCP Hackathon
 
-**Tagline:** A statistical research bench where AI agents and humans share one live workspace. Browser-only, no backend, powered by WebMCP.
-
-**Live URL:** https://computeopenai.netlify.app/
-**Repository:** https://github.com/CameronJFowler/Compute-OpenAiMCP
-
----
-
-## What it does
-
-Compute is a browser-based statistical research workbench that exposes a full analysis toolkit to AI agents via WebMCP — no server, no API key, no data leaving the browser. An agent and a human share one workspace: the same hypothesis, the same dataset, the same sample window. When an agent runs a regression, the numbers go to the agent and the chart renders in the browser for the human to inspect. Every tool call is logged, and findings must cite the step that produced them.
-
-Five real datasets are bundled as static files (climate, biology, astronomy, and two finance datasets), with 14 tools available at peak — a number that grows dynamically as datasets are loaded, features are engineered, and backtests are registered.
+**Live demo:** https://computeopenai.netlify.app/  
+**Repo:** https://github.com/CameronJFowler/Compute-OpenAiMCP  
+**Tagline:** A research bench where you can check the agent's work — live in the browser, no backend needed.
 
 ---
 
-## Why WebMCP specifically — not a headless MCP server
+## What it is
 
-Compute has five structural properties that require tools to live inside the page next to a human interface. A headless server cannot do any of them:
+Compute is a browser-only statistical research bench. An AI agent and a human share one workspace: the same question, the same dataset, the same analysis. When the agent runs a regression, the numbers go to the agent and the chart renders on screen for the human. Every step is logged, and findings have to cite the step that produced them — the agent can't just make something up.
 
-1. **Dynamic tool surface.** The tool count starts at 4 (explore-only) and grows to 12 when a dataset loads, 13 when a feature is created, and 14 when a backtest is registered. The schema returned by each tool call reflects the actual columns and entities in the loaded data. Tools that reference the page's live state cannot exist outside the page.
-
-2. **Split results: numbers to the agent, charts in the browser.** When `run_regression` or `run_backtest` executes, structured numbers are returned to the agent while Chart.js renders the corresponding visualization in the browser for the human. Splitting results between two consumers — agent and page — is a WebMCP primitive.
-
-3. **Shared mutable state.** The human can change the research question, narrow the sample window, or edit the hypothesis while the agent is mid-session. The next tool call reads the updated value because there is only one copy of it. Shared mutable state between a person and an agent is the core WebMCP thesis; it cannot be emulated by a server with no awareness of the page.
-
-4. **Human-in-the-loop approval gates.** Stationary-block bootstrap with more than 2,000 simulations renders an approval card in the browser instead of running silently. The agent is blocked until the human approves. This gate is enforced by the same state object the agent writes to; it can only work when the tool is inside the page.
-
-5. **Provenance and trust.** Every tool call is appended to a session log. `record_finding` requires a `supporting_steps` list: the agent must cite the logged steps that support its claim. The log is in the page, visible to the human, and the citation check runs inside the tool. A headless server has no ground truth to check against.
+Everything runs in the browser via [WebMCP](https://github.com/webmachinelearning/webmcp). No server, no API key, no data leaves the page.
 
 ---
 
-## How to connect ChatGPT
+## Why WebMCP — and not a regular MCP server
 
-1. Open ChatGPT and start a new conversation.
-2. Paste this URL into the chat to open it in ChatGPT's browser:
-   `https://computeopenai.netlify.app/`
-3. Ask a plain-language research question — do not name a tool or dataset. For example:
-   - *"Is there a momentum effect in US industry returns?"*
-   - *"Do Adelie and Gentoo penguins differ in body mass?"*
-   - *"How much of global temperature variation is explained by CO2?"*
-4. Watch the **Agent** indicator in the top-right header. The capability count jumps from 4 to 12 when the agent loads a dataset, then to 13 and 14 as features and backtests are created.
-5. Results appear in the workspace as the agent calls tools. You can edit the hypothesis or narrow the sample window between calls — the agent reads the updated state on its next call.
+Five things that only work because the tools live inside the page:
 
-### Local testing (Chrome + WebMCP flag)
+1. **Tool count changes as you work.** It starts at 4 (explore only) and climbs to 12 when a dataset loads, 13 when you create a signal column, 14 after a backtest runs. The schema for each tool is built from whatever columns actually exist in the loaded data — a static server manifest can't do that.
 
-1. `npm run dev` from the repository root.
-2. Open `chrome://flags`, search for `webmcp`, enable it, relaunch Chrome.
-3. Open `http://localhost:5180` and ask a research question.
-4. Add `?dev=1` to the URL to open the developer tool console for testing without a live agent.
+2. **Two audiences, one tool call.** The agent gets compact numbers (capped at 1,500 chars). The human gets a full chart. The same tool call, two different outputs, without anything bulky crossing into the model.
+
+3. **One shared workspace.** The human can change the question or narrow the date range while the agent is mid-session. The next tool call reads the new values, because there's only one copy of everything.
+
+4. **Approval before expensive operations.** Running a bootstrap with 2,000+ simulations shows a confirmation card first. The agent is paused until the human clicks approve.
+
+5. **Citations are enforced.** `record_finding` checks every cited step number against the session log. The agent can't claim a result it didn't compute.
 
 ---
 
-## Demo script for judges
+## Connecting ChatGPT
 
-Use a fresh page for each prompt so the testing ledger stays legible.
-
-### Finance: momentum
-> Is there a momentum effect in US industry returns, and does it survive out of sample and transaction costs?
-
-Expected path: agent calls `list_datasets` → `load_dataset` (tool count: 4→12) → `create_feature` (→13) → `run_backtest` (→14) → `run_regression` with HAC standard errors → `hypothesis_test` with session-adjusted threshold → `record_finding` citing steps.
-
-### Biology: species comparison
-> Do Adelie and Gentoo penguins differ in body mass? Show whether the difference survives the session-adjusted significance threshold.
-
-Expected path: `load_dataset` (penguins) → `describe_dataset` → `hypothesis_test` with `group_column=species` → `record_finding`.
-
-### Climate: regression with missing data
-> Load the climate data. How much of the variation in global temperature is explained by CO2, and how many years were excluded because CO2 data was missing?
-
-Expected path: `load_dataset` (climate_annual) → `run_regression` (agent receives the count of dropped rows) → `hypothesis_test` → `record_finding`.
-
-### Astronomy: historical constant recovery
-> Fit Hubble's original 1929 data and report what value of the Hubble constant he recovered. Why does it differ from the modern value?
-
-Expected path: `load_dataset` (hubble_1929) → `run_regression` on distance vs velocity → `record_finding` citing the ~450 km/s/Mpc result and noting the distance calibration error.
+1. Open ChatGPT and start a new chat.
+2. Paste **https://computeopenai.netlify.app/** into the chat — ChatGPT will open it in its browser.
+3. Ask a plain research question in plain English. No need to name a tool or dataset.
+4. Watch the **Agent** badge in the top right: it goes from 4 to 12 tools when data loads.
+5. Results appear live as the agent works. You can edit the question or change the date window at any time — the agent picks it up on the next call.
 
 ---
 
-## Technical highlights
+## Momentum in US industry returns — does it survive?
 
-- **No backend.** All five datasets are committed as static CSV files under `public/data/`. The app makes zero network requests at runtime — no API key, no rate limit, nothing that goes down during judging.
-- **Stats engine verified against SciPy/NumPy.** `scripts/make_fixtures.py` generates `tests/fixtures/fixtures.json` from Python references; the TypeScript test suite asserts against those numbers. Covered: t/F/chi-squared distributions, Newey-West HAC covariance, Householder QR regression, Benjamini-Hochberg FDR control.
-- **Session-adjusted significance.** Every `hypothesis_test` call increments the session counter. The Bonferroni-adjusted threshold and Benjamini-Hochberg discovery count are returned in every result, so the agent is required to reason about multiple testing.
-- **Tool schema reflects live page state.** `list_datasets` returns the names of currently-available columns. `load_dataset` updates the schema of downstream tools (summarize, filter, feature engineering) to reflect the actual data. An agent that asks for a column that does not exist gets a typed error, not a silent failure.
-- **Reproducibility.** `scripts/fetch_data.py` documents exactly how the bundled datasets were sourced, why 49 Fama-French industry portfolios replaced the original plan for individual stocks (Stooq now serves a bot-check page to non-browser clients), and records the retrieval date in `public/data/SOURCES.md`.
+One of the bundled datasets is 49 US industry portfolios, daily, 2015–2025. When you ask **"Does industry momentum survive out of sample and transaction costs?"**, the app automatically:
+
+- Creates a 252-day (12-1) momentum signal on daily returns
+- Runs a dollar-neutral backtest split 70/30 chronologically, with transaction costs on turnover
+- Runs a Fama-French three-factor regression on returns
+- Records a finding and builds a full research report
+
+**The answer the app produces on the 2015–2025 data:**  
+The momentum strategy **degrades** out of sample on this period — driven largely by the 2020 COVID momentum crash and the 2022 value/momentum rotation. In-sample Sharpe looks reasonable; out-of-sample it falls significantly. The three-factor regression shows strong market beta (~0.95) and positive loadings on SMB and HML, confirming these are small-cap, value-tilted portfolios rather than a clean momentum factor.
+
+Try it yourself — the backtest chart, regression table, and full report are all generated live in the browser.
 
 ---
 
-## Devpost submission checklist
+## Demo prompts for judges
 
-- [x] Submitted at https://webmcp.devpost.com/
-- [x] Public repository with MIT licence: https://github.com/CameronJFowler/Compute-OpenAiMCP
+Use a fresh page (click **↺ New** or reload) between prompts so the significance counter resets.
+
+### Finance — momentum
+> Does industry momentum survive out of sample and transaction costs?
+
+The app loads the 49-industry daily panel, creates a 252-day momentum signal, runs the backtest, and fits a three-factor regression. The finding states plainly whether momentum survives, with actual CAGR and Sharpe numbers for both periods.
+
+### Biology — species comparison  
+> Do Adelie and Gentoo penguins differ in body mass?
+
+Loads the Palmer Penguins dataset, runs an ANOVA comparing body mass across species, then fits a regression on morphological predictors. The conclusion states whether the groups differ and whether the result survives the session-adjusted threshold.
+
+### Climate — explained variance
+> How much of global warming since 1880 is explained by CO2?
+
+Loads the annual climate series, fits a regression of temperature anomaly on CO2 concentration. The R² tells you how much variance CO2 explains; the coefficient gives the marginal warming per ppm.
+
+### Astronomy — recovering the Hubble constant
+> Fit Hubble's 1929 data and recover the Hubble constant.
+
+24 galaxies, a simple regression of recession velocity on distance. The slope (~450 km/s/Mpc) is Hubble's original estimate — off from the modern ~70 because his distances were calibrated on the wrong Cepheid period-luminosity relation.
+
+---
+
+## Technical notes
+
+- All five datasets are committed as static CSV files. Zero network requests at runtime.
+- Stats engine cross-checked against SciPy/NumPy reference implementations (Newey-West HAC, Householder QR, Benjamini-Hochberg FDR).
+- The significance threshold tightens in real time as tests accumulate — the agent sees the updated threshold in every result.
+- `record_finding` verifies citations against the session log. A finding that cites a step that didn't run is refused.
+
+---
+
+## Submission checklist
+
+- [x] Public repo with MIT licence: https://github.com/CameronJFowler/Compute-OpenAiMCP
 - [x] Live public URL: https://computeopenai.netlify.app/
-- [x] Working static build (`npm run build`, `npm test`)
-- [x] WebMCP tool registry with schemas generated from active page state
-- [x] Five bundled datasets across four domains (climate, biology, astronomy, finance)
+- [x] Working build (`npm run build`, `npm test`)
+- [x] WebMCP tool registry — schemas generated from live page state
+- [x] Five datasets across four domains
 - [x] Dynamic tool surface (4 → 12 → 13 → 14 tools)
-- [x] Split results: numbers to agent, charts in browser
-- [x] Shared mutable state: human and agent share one workspace
-- [x] Human-in-the-loop approval gates (bootstrap threshold)
-- [x] Provenance: every call logged, findings must cite steps
-- [ ] Public demo video (sub 3 minutes with audio) — record and link here
+- [x] Split results: agent gets numbers, human gets charts
+- [x] Shared mutable state — one workspace for both
+- [x] Human-in-the-loop approval gates
+- [x] Provenance: every step logged, findings must cite source
+- [x] Auto-analysis pipeline — runs momentum backtest + factor regression automatically
+- [x] Auto-report — `build_report` called at end of pipeline with a real conclusion
+- [x] Help page with connection instructions (? button in footer)
+- [ ] **Demo video (sub 3 minutes, with audio) — record and link here**
+
+---
+
+## GitHub repo description to set manually
+
+Go to **Settings** on the repo and paste this into the About/Description field:
+
+> A research bench where AI agents and humans share one live workspace. Browser-only, no backend — powered by WebMCP.
