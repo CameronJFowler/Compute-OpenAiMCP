@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { DEFAULT_ALPHA } from "../config";
 import { getTestingSummary, useWorkspace } from "../state/workspace";
 
 function Section({
@@ -39,6 +40,18 @@ function Author({ author }: { author: "agent" | "human" | null }) {
       )}
     </span>
   );
+}
+
+/**
+ * A p-value that is small enough to underflow is reported as such rather than
+ * as zero. The tails are computed directly now, so this only fires at the
+ * genuine limit of double precision - but "0.00" would still read as a
+ * measurement rather than as the edge of the arithmetic.
+ */
+function formatP(p: number): string {
+  if (!Number.isFinite(p)) return "n/a";
+  if (p === 0) return "< 1e-300";
+  return p.toPrecision(3);
 }
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -183,40 +196,56 @@ export function Brief() {
       )}
 
       <Section title="Multiple testing">
-        <Row
-          label="Hypotheses tested"
-          value={String(summary.testsRun)}
-          tone={summary.testsRun > 0 ? "text-accent" : "text-ink2"}
-        />
-        <Row label="Naive threshold" value={summary.naiveAlpha.toFixed(4)} />
-        <Row
-          label="Bonferroni"
-          value={summary.bonferroniAlpha.toPrecision(3)}
-          tone={summary.testsRun > 1 ? "text-accent" : "text-ink2"}
-        />
-        <Row
-          label="Benjamini-Hochberg"
-          value={`${summary.benjaminiHochbergDiscoveries} of ${summary.testsRun || 0}`}
-        />
-
-        {last && (
-          <p className="mt-2.5 text-[11.5px] leading-relaxed">
-            {last.pValue <= summary.bonferroniAlpha ? (
-              <span className="text-pos">
-                Latest p = {last.pValue.toPrecision(3)} survives the session-adjusted
-                threshold.
-              </span>
-            ) : last.pValue <= summary.naiveAlpha ? (
-              <span className="text-neg">
-                Latest p = {last.pValue.toPrecision(3)} clears 0.05 on its own but not
-                after adjusting for the {summary.testsRun} tests run here.
-              </span>
-            ) : (
-              <span className="text-ink3">
-                Latest p = {last.pValue.toPrecision(3)}. Not significant.
-              </span>
-            )}
+        {summary.testsRun === 0 ? (
+          /* Four rows of zeros said nothing. Before anything has been tested
+             the useful thing is not the numbers, which are all defaults, but
+             what is about to happen to them. */
+          <p className="text-[12.5px] text-ink3 leading-relaxed">
+            Nothing tested yet. Every hypothesis tested in this session tightens the
+            threshold a result has to clear: after five tests, significant means
+            p&nbsp;&le;&nbsp;{(DEFAULT_ALPHA / 5).toFixed(3)} rather than{" "}
+            {DEFAULT_ALPHA}. The count and the adjusted threshold are returned inside
+            every test result, so the agent has to reason about them too.
           </p>
+        ) : (
+          <>
+            <Row
+              label="Hypotheses tested"
+              value={String(summary.testsRun)}
+              tone="text-accent"
+            />
+            <Row label="Naive threshold" value={summary.naiveAlpha.toFixed(4)} />
+            <Row
+              label="Bonferroni"
+              value={summary.bonferroniAlpha.toPrecision(3)}
+              tone={summary.testsRun > 1 ? "text-accent" : "text-ink2"}
+            />
+            <Row
+              label="Survive FDR control"
+              value={`${summary.benjaminiHochbergDiscoveries} of ${summary.testsRun}`}
+            />
+
+            {last && (
+              <p className="mt-2.5 text-[11.5px] leading-relaxed">
+                {last.pValue <= summary.bonferroniAlpha ? (
+                  <span className="text-pos">
+                    Latest p = {formatP(last.pValue)} survives the session-adjusted
+                    threshold.
+                  </span>
+                ) : last.pValue <= summary.naiveAlpha ? (
+                  <span className="text-neg">
+                    Latest p = {formatP(last.pValue)} clears {summary.naiveAlpha} on its
+                    own but not after adjusting for the {summary.testsRun} tests run
+                    here.
+                  </span>
+                ) : (
+                  <span className="text-ink3">
+                    Latest p = {formatP(last.pValue)}. Not significant.
+                  </span>
+                )}
+              </p>
+            )}
+          </>
         )}
       </Section>
 

@@ -73,6 +73,27 @@ def distribution_fixtures():
             {"s": s, "x": x, "expected": float(stats.gamma.cdf(x, s))}
             for s, x in gamma_cases
         ],
+        # Far tails. `1 - cdf` collapses to exactly zero here, which is how a
+        # significant ANOVA came to report p = 0.00. These are the survival
+        # functions, which scipy computes directly and so must we.
+        "f_upper_tail": [
+            {"f": f, "d1": d1, "d2": d2, "expected": float(stats.f.sf(f, d1, d2))}
+            for f, d1, d2 in [
+                (3.0, 5, 20), (10.0, 2, 50), (50.0, 2, 300),
+                (200.0, 3, 340), (1000.0, 5, 100), (5000.0, 2, 341),
+            ]
+        ],
+        "chi2_upper_tail": [
+            {"x": x, "k": k, "expected": float(stats.chi2.sf(x, k))}
+            for x, k in [
+                (3.84, 1), (10.0, 5), (100.0, 1),
+                (300.0, 2), (500.0, 10), (120.0, 4),
+            ]
+        ],
+        "t_two_sided_far": [
+            {"t": t, "df": df, "expected": float(2 * stats.t.sf(abs(t), df))}
+            for t, df in [(10.0, 100), (20.0, 250), (35.0, 340), (60.0, 1000)]
+        ],
     }
 
 

@@ -138,6 +138,26 @@ export function regularizedGammaP(s: number, x: number): number {
 }
 
 /**
+ * Upper regularized incomplete gamma Q(s, x), computed directly.
+ *
+ * Not `1 - P`. Once the lower tail rounds to 1 in double precision - which
+ * happens as soon as the upper tail falls below about 1e-16 - the subtraction
+ * returns exactly zero, and every strongly significant result reports p = 0.
+ * That is not merely an ugly number: it throws away the difference between
+ * p = 1e-20 and p = 1e-300, in a tool whose entire argument is about taking
+ * p-values seriously.
+ */
+export function regularizedGammaQ(s: number, x: number): number {
+  if (x < 0 || s <= 0) return NaN;
+  if (x === 0) return 1;
+  // The continued fraction converges on the upper tail, which is the branch
+  // that matters; the series side is where the tail is large and cancellation
+  // is harmless.
+  if (x < s + 1) return 1 - gammaPSeries(s, x);
+  return gammaQContinuedFraction(s, x);
+}
+
+/**
  * Error function. Built on the incomplete gamma rather than the
  * Abramowitz-Stegun rational approximation: same code path already present,
  * about seven more correct digits.
@@ -236,7 +256,17 @@ export function fCdf(f: number, d1: number, d2: number): number {
 
 /** Upper-tail p-value for an F statistic. */
 export function fUpperTailP(f: number, d1: number, d2: number): number {
-  return 1 - fCdf(f, d1, d2);
+  if (d1 <= 0 || d2 <= 0) return NaN;
+  if (f <= 0) return 1;
+  /**
+   * The complement by symmetry, not by subtraction.
+   *
+   * I_x(a,b) = 1 - I_{1-x}(b,a), so with x = d1·f / (d1·f + d2) the upper tail
+   * is I_{d2/(d1·f + d2)}(d2/2, d1/2) evaluated directly. `1 - fCdf` collapses
+   * to exactly zero for any strongly significant F, which is how a one-way
+   * ANOVA across three penguin species came to report p = 0.00.
+   */
+  return regularizedIncompleteBeta(d2 / (d1 * f + d2), d2 / 2, d1 / 2);
 }
 
 /** Chi-square CDF with k degrees of freedom. */
@@ -248,5 +278,7 @@ export function chi2Cdf(x: number, k: number): number {
 
 /** Upper-tail p-value for a chi-square statistic. */
 export function chi2UpperTailP(x: number, k: number): number {
-  return 1 - chi2Cdf(x, k);
+  if (k <= 0) return NaN;
+  if (x <= 0) return 1;
+  return regularizedGammaQ(k / 2, x / 2);
 }

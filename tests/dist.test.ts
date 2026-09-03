@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import fixtures from "./fixtures/fixtures.json";
 import {
   chi2Cdf,
+  chi2UpperTailP,
   erf,
   fCdf,
+  fUpperTailP,
   logGamma,
   normalCdf,
   normalInv,
@@ -153,6 +155,70 @@ describe("fCdf", () => {
     const t = 2.4;
     const df = 15;
     expectClose(fCdf(t * t, 1, df), 1 - studentTTwoSidedP(t, df), 1e-11);
+  });
+});
+
+/**
+ * Upper tails, computed directly rather than as `1 - cdf`.
+ *
+ * The subtraction collapses to exactly zero as soon as the tail falls below
+ * about 1e-16, because the lower tail has rounded to 1. That is how a one-way
+ * ANOVA across three penguin species came to report p = 0.00 - and it throws
+ * away the difference between p = 1e-20 and p = 1e-300 in a tool whose whole
+ * argument is about taking p-values seriously.
+ */
+describe("far tails", () => {
+  it("matches scipy f.sf, including far out", () => {
+    for (const c of d.f_upper_tail) {
+      expectClose(fUpperTailP(c.f, c.d1, c.d2), c.expected, 1e-9);
+    }
+  });
+
+  it("matches scipy chi2.sf, including far out", () => {
+    for (const c of d.chi2_upper_tail) {
+      expectClose(chi2UpperTailP(c.x, c.k), c.expected, 1e-9);
+    }
+  });
+
+  it("matches scipy on far-tail two-sided t", () => {
+    for (const c of d.t_two_sided_far) {
+      // The last case underflows the double range in scipy too, so zero there
+      // is the correct answer rather than a lost one.
+      if (c.expected === 0) {
+        expect(studentTTwoSidedP(c.t, c.df)).toBe(0);
+      } else {
+        expectClose(studentTTwoSidedP(c.t, c.df), c.expected, 1e-9);
+      }
+    }
+  });
+
+  /** The regression guard: these all returned exactly 0 before. */
+  it("does not collapse a significant result to zero", () => {
+    expect(fUpperTailP(200, 3, 340)).toBeGreaterThan(0);
+    expect(fUpperTailP(5000, 2, 341)).toBeGreaterThan(0);
+    expect(chi2UpperTailP(300, 2)).toBeGreaterThan(0);
+    expect(chi2UpperTailP(500, 10)).toBeGreaterThan(0);
+
+    // And keeps enough resolution to tell two tiny p-values apart.
+    expect(fUpperTailP(200, 3, 340)).toBeGreaterThan(fUpperTailP(1000, 3, 340));
+  });
+
+  it("agrees with the t distribution, which is computed independently", () => {
+    // F(1, df) is t(df) squared, and studentTTwoSidedP never subtracts.
+    for (const [t, df] of [[3, 40], [8, 120], [15, 300]] as [number, number][]) {
+      expectClose(fUpperTailP(t * t, 1, df), studentTTwoSidedP(t, df), 1e-10);
+    }
+  });
+
+  it("returns 1 below the support and stays monotone", () => {
+    expect(fUpperTailP(0, 3, 20)).toBe(1);
+    expect(chi2UpperTailP(0, 4)).toBe(1);
+    let previous = 1;
+    for (const x of [1, 5, 20, 60, 150, 400]) {
+      const p = chi2UpperTailP(x, 4);
+      expect(p).toBeLessThan(previous);
+      previous = p;
+    }
   });
 });
 

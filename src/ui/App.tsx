@@ -42,8 +42,11 @@ function SignificanceReadout() {
         {/* Spelled out, not "α": the .label rule uppercases, and CSS maps a
             lowercase alpha to a capital Alpha, which reads as a typo. */}
         <span className="label">Adjusted alpha</span>
+        {/* Nothing has been adjusted for yet; showing the naive value under
+            that label would be a small lie in the one place the project asks
+            to be believed. */}
         <span className="text-[13px] tnum text-ink2">
-          {summary.bonferroniAlpha.toPrecision(3)}
+          {summary.testsRun === 0 ? "—" : summary.bonferroniAlpha.toPrecision(3)}
         </span>
       </div>
 
