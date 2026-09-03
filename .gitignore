@@ -6,10 +6,13 @@ dist-ssr
 .env
 .netlify
 coverage
-
-# Ruflo local secrets and runtime data
 .env.local
 .env.*.local
-.claude-flow/data/
-.claude-flow/logs/
-.claude-flow/sessions/
+
+# Dev tooling — not part of the project
+.claude/
+.claude-flow/
+.swarm/
+.agents/
+CLAUDE.md
+.mcp.json
