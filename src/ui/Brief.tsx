@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { APP_NAME, DEFAULT_ALPHA } from "../config";
 import { getTestingSummary, useWorkspace } from "../state/workspace";
+import { loadDatasetById, loadDatasetForQuestion } from "../webmcp/tools/session";
 
 function Section({
   title,
@@ -161,12 +162,43 @@ export function Brief() {
   const [draft, setDraft] = useState(hypothesis);
   useEffect(() => setDraft(hypothesis), [hypothesis]);
 
+  // Running state: set on submit, cleared when step count changes.
+  const [running, setRunning] = useState(false);
+  const prevSteps = useRef(0);
+  const stepCount = useWorkspace((s) => s.steps.length);
+  useEffect(() => {
+    if (stepCount > prevSteps.current) {
+      setRunning(false);
+      prevSteps.current = stepCount;
+    }
+  }, [stepCount]);
+
   const summary = getTestingSummary();
   const last = tests[tests.length - 1];
   const narrowed = Boolean(sampleStart || sampleEnd);
 
   const quickButton =
     "px-2 py-[3px] text-[11px] rounded border border-hair text-ink3 hover:text-ink hover:border-hair2 transition";
+
+  /** Fire the analysis pipeline from a human-initiated submit. */
+  async function handleSubmit() {
+    if (!draft.trim() || running) return;
+    setRunning(true);
+    try {
+      if (frame && datasetId) {
+        // Dataset already loaded — reload with current date range to re-run pipeline.
+        await loadDatasetById(datasetId, {
+          start: sampleStart ?? undefined,
+          end: sampleEnd ?? undefined,
+        });
+      } else {
+        // Cold start — route to the right dataset and run.
+        await loadDatasetForQuestion(draft.trim());
+      }
+    } catch {
+      setRunning(false);
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -193,11 +225,25 @@ export function Brief() {
             setDraft(e.target.value);
             setHypothesis(e.target.value);
           }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void handleSubmit();
+          }}
           rows={4}
           spellCheck={false}
           placeholder="State it so that it could turn out to be false."
           className="w-full bg-canvas border border-hair rounded px-2.5 py-2 text-[12.5px] leading-relaxed text-ink placeholder:text-ink3/70 focus:outline-none focus:border-hair2 resize-none"
         />
+        {!frame && (
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={!draft.trim() || running}
+            className="mt-2 w-full py-2 rounded text-[12.5px] font-medium transition
+              bg-accent text-canvas hover:brightness-110
+              disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {running ? "Running…" : "Run Analysis →"}
+          </button>
+        )}
       </Section>
 
       <Section title="Data">
@@ -271,10 +317,24 @@ export function Brief() {
             </button>
           </div>
 
-          <p className="text-[11.5px] text-ink3 leading-relaxed">
+          <p className="text-[11.5px] text-ink3 leading-relaxed mb-3">
             Changing this changes what the next analysis runs on, including the
             agent&apos;s. There is no second copy to synchronise.
           </p>
+
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={!draft.trim() || running}
+            className="w-full py-2 rounded text-[12.5px] font-medium transition
+              bg-accent text-canvas hover:brightness-110
+              disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {running
+              ? "Running…"
+              : narrowed
+              ? "Re-run with this window →"
+              : "Re-run Analysis →"}
+          </button>
         </Section>
       )}
 
