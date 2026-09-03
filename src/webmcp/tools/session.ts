@@ -300,10 +300,10 @@ async function autoAnalyzePipeline(): Promise<void> {
         (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
       );
       const dep = nonForward[0];
-      const regressors = nonForward.slice(1, 4);
-      if (dep && regressors.length > 0 && tools["run_regression"]) {
+      const independent = nonForward.slice(1, 4);
+      if (dep && independent.length > 0 && tools["run_regression"]) {
         setNextActor("human");
-        await tools["run_regression"].execute({ dependent: dep, regressors });
+        await tools["run_regression"].execute({ dependent: dep, independent });
       }
     } else if (tools["summary_stats"]) {
       // Step 2: summary stats for flat/series data
@@ -318,7 +318,7 @@ async function autoAnalyzePipeline(): Promise<void> {
         setNextActor("human");
         await tools["run_regression"].execute({
           dependent: numericCols[0],
-          regressors: numericCols.slice(1, 3),
+          independent: numericCols.slice(1, 3),
         });
       }
     }
@@ -346,9 +346,12 @@ async function autoAnalyzePipeline(): Promise<void> {
       }
 
       if (parts.length === 0) {
-        // Fallback for unexpected paths
+        // Fallback: find any analysis step (not set_hypothesis/load_dataset/add_feature)
         const anyStep = completedSteps.find(
-          (s) => s.tool !== "load_dataset" && s.tool !== "add_feature",
+          (s) =>
+            s.tool !== "set_hypothesis" &&
+            s.tool !== "load_dataset" &&
+            s.tool !== "add_feature",
         );
         if (anyStep?.digest) parts.push(`${anyStep.digest}.`);
       }
