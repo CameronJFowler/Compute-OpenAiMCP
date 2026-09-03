@@ -269,6 +269,80 @@ export async function loadDatasetById(
  * For panel datasets: momentum feature → backtest → regression → finding.
  * For flat/cross-section: summary stats → regression → finding.
  */
+/**
+ * Produce a conclusive, human-readable conclusion for build_report.
+ *
+ * Draws on actual results — backtest metrics, hypothesis test p-values,
+ * regression output — rather than boilerplate. States a verdict plainly
+ * and flags when further testing is warranted.
+ */
+function buildConclusion({
+  bt,
+  regressionStep,
+  testStep,
+  testing,
+  state,
+}: {
+  bt: import("../../engine/backtest").BacktestResult | null;
+  regressionStep: import("../../state/runlog").RunStep | undefined;
+  testStep: import("../../state/runlog").RunStep | undefined;
+  testing: import("../../engine/multipletests").MultipleTestingSummary;
+  state: ReturnType<typeof useWorkspace.getState>;
+}): string {
+  const sentences: string[] = [];
+  const furtherNeeded: string[] = [];
+
+  // Backtest verdict
+  if (bt) {
+    const oos = bt.outOfSample;
+    const survives = oos.sharpe > 0.3 && oos.cagr > 0;
+    sentences.push(
+      survives
+        ? `The momentum strategy survives out of sample, delivering ${(oos.cagr * 100).toFixed(1)}% CAGR and a Sharpe ratio of ${oos.sharpe.toFixed(2)} in the holdout period.`
+        : `The momentum strategy does not survive out of sample: the holdout period produced ${(oos.cagr * 100).toFixed(1)}% CAGR and Sharpe ${oos.sharpe.toFixed(2)}, below the threshold for a reliable signal.`,
+    );
+    if (!survives) furtherNeeded.push("extend the sample window or adjust the lookback period");
+  }
+
+  // Hypothesis test verdict
+  if (testStep) {
+    const lastTest = state.tests[state.tests.length - 1];
+    if (lastTest) {
+      const sig = lastTest.pValue <= testing.bonferroniAlpha;
+      const borderline = !sig && lastTest.pValue <= testing.naiveAlpha;
+      sentences.push(
+        sig
+          ? `The group comparison is statistically significant after adjusting for multiple testing (p = ${lastTest.pValue < 1e-10 ? lastTest.pValue.toExponential(2) : lastTest.pValue.toPrecision(3)}): the groups differ.`
+          : borderline
+          ? `The group comparison reaches the naive threshold (p = ${lastTest.pValue.toPrecision(3)}) but does not survive the session-adjusted Bonferroni threshold (${testing.bonferroniAlpha.toPrecision(3)}): the evidence is inconclusive.`
+          : `The group comparison is not significant (p = ${lastTest.pValue.toPrecision(3)}): no reliable difference was detected.`,
+      );
+      if (borderline || !sig) furtherNeeded.push("run a pre-registered test with a single hypothesis");
+    }
+  }
+
+  // Regression verdict
+  if (regressionStep?.digest && !bt) {
+    sentences.push(`Regression results: ${regressionStep.digest}.`);
+    // Check if any test was clearly significant
+    const sigTests = state.tests.filter((t) => t.pValue <= testing.bonferroniAlpha);
+    if (sigTests.length === 0 && testing.testsRun > 0) {
+      furtherNeeded.push("run additional hypothesis tests on the significant coefficients");
+    }
+  }
+
+  if (sentences.length === 0) {
+    sentences.push("Preliminary analysis complete. Results are displayed in the workspace.");
+    furtherNeeded.push("run hypothesis tests and a regression to draw firmer conclusions");
+  }
+
+  if (furtherNeeded.length > 0) {
+    sentences.push(`Further analysis recommended: ${furtherNeeded.join("; ")}.`);
+  }
+
+  return sentences.join(" ");
+}
+
 async function autoAnalyzePipeline(): Promise<void> {
   // Small delay so the UI settles after the tool result renders.
   await new Promise((r) => setTimeout(r, 400));
@@ -363,7 +437,7 @@ async function autoAnalyzePipeline(): Promise<void> {
       }
     }
 
-    // Record a finding with real numbers tied to the question.
+    // Record a finding with real numbers, then auto-build the report.
     const state = useWorkspace.getState();
     const completedSteps = state.steps.filter((s) => s.status === "ok");
     const completedIds = completedSteps.map((s) => s.id);
@@ -373,7 +447,7 @@ async function autoAnalyzePipeline(): Promise<void> {
       const regressionStep = completedSteps.find((s) => s.tool === "run_regression");
       const backtestStep = completedSteps.find((s) => s.tool === "run_backtest");
       const testStep = completedSteps.find((s) => s.tool === "hypothesis_test");
-      const q = state.hypothesis ? `Re: "${state.hypothesis.slice(0, 80)}" — ` : "";
+      const testing = getTestingSummary();
 
       const parts: string[] = [];
 
@@ -381,7 +455,7 @@ async function autoAnalyzePipeline(): Promise<void> {
         const oos = bt.outOfSample;
         const survives = oos.sharpe > 0.3 && oos.cagr > 0;
         parts.push(
-          `${q}Momentum (252-day): full-sample CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)}; out-of-sample CAGR ${(oos.cagr * 100).toFixed(1)}%, Sharpe ${oos.sharpe.toFixed(2)} — ${survives ? "survives" : "does not survive"} out of sample.`,
+          `Momentum (252-day): full-sample CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)}; out-of-sample CAGR ${(oos.cagr * 100).toFixed(1)}%, Sharpe ${oos.sharpe.toFixed(2)} — ${survives ? "survives" : "does not survive"} out of sample.`,
         );
       }
       if (testStep?.digest) parts.push(testStep.digest + ".");
@@ -391,13 +465,13 @@ async function autoAnalyzePipeline(): Promise<void> {
         const anyAnalysis = completedSteps.find(
           (s) => !["set_hypothesis", "load_dataset", "add_feature"].includes(s.tool),
         );
-        if (anyAnalysis?.digest) parts.push(`${q}${anyAnalysis.digest}.`);
+        if (anyAnalysis?.digest) parts.push(anyAnalysis.digest + ".");
       }
 
       const findingText =
         parts.length > 0
           ? parts.join(" ")
-          : `${q}Preliminary analysis complete — see results in the workspace.`;
+          : "Preliminary analysis complete — see results in the workspace.";
 
       setNextActor("human");
       await tools["record_finding"].execute({
@@ -405,13 +479,9 @@ async function autoAnalyzePipeline(): Promise<void> {
         supporting_steps: completedIds,
       });
 
-      // Auto-build the report so the workspace is fully populated.
+      // Auto-build the report with a conclusive, human-readable conclusion.
       if (tools["build_report"]) {
-        const conclusion = bt
-          ? `The 252-day momentum strategy on industry returns ${bt.outOfSample.sharpe > 0.3 && bt.outOfSample.cagr > 0 ? "survives" : "does not survive"} out-of-sample with Sharpe ${bt.outOfSample.sharpe.toFixed(2)} and CAGR ${(bt.outOfSample.cagr * 100).toFixed(1)}%.`
-          : regressionStep?.digest
-          ? `Preliminary regression complete: ${regressionStep.digest}. Further analysis recommended.`
-          : `Preliminary analysis complete. Review findings and run additional tests as needed.`;
+        const conclusion = buildConclusion({ bt, regressionStep, testStep, testing, state });
         setNextActor("human");
         await tools["build_report"].execute({ conclusion });
       }
