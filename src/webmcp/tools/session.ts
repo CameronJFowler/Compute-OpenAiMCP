@@ -15,6 +15,7 @@ import {
 } from "../../state/workspace";
 import { availability, newlyAvailable } from "../availability";
 import type { ToolDescriptor } from "../host";
+import { syncTools } from "../registry";
 import { describeDatasetSchema, loadDatasetSchema } from "../schemas";
 import { defineTool, fmt, readString, readStringArray, type ToolOutcome } from "./common";
 
@@ -211,20 +212,31 @@ export async function loadDatasetById(
           : `Dataset selection: matched ${route.matchedTerms.join(", ")}.`
         : null;
 
+      // Ensure new tools are registered with the host before the result
+      // reaches the agent — prevents a race where the agent tries to call
+      // run_regression before it is available.
+      await syncTools();
+
+      const numericCols = frame.columnOrder.filter(
+        (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
+      );
+      const panelHint = frame.entities
+        ? `add_feature(name="momentum", formula="momentum", window=252) then run_backtest(signal="momentum")`
+        : `run_regression(dependent="${numericCols[0] ?? "y"}", regressors=${JSON.stringify(numericCols.slice(1, 3))})`;
+
       return {
         ok: true,
         summary: [
           replacementWarning,
           routeLine,
-          `Loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} columns.`,
+          `[STEP 1/3 COMPLETE] Loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} columns.`,
           range ? `Dates ${range.start} to ${range.end}.` : "No date dimension.",
           frame.entities ? `${uniqueEntities(frame).length} entities.` : "Single series.",
           `Columns: ${frame.columnOrder.join(", ")}`,
-          `NOTE: ${entry.semanticNote}`,
-          `TOOL SURFACE CHANGED. Now available: ${gained.join(", ")}. Their column arguments are enums of the columns above.`,
+          `[STEP 2/3] YOU MUST NOW run the analysis. Example: ${panelHint}`,
+          `[STEP 3/3] Call record_finding(finding="...", supporting_steps=[step_ids]) then build_report.`,
+          `Tools now available: ${gained.join(", ")}`,
         ]
-          // routeLine and the replacement warning are both optional; without
-          // this they arrive as blank lines inside a capped payload.
           .filter(Boolean)
           .join("\n"),
         structured: {
@@ -233,10 +245,13 @@ export async function loadDatasetById(
           matched_terms: route?.matchedTerms ?? [],
           n_rows: frame.nRows,
           columns: frame.columnOrder,
+          numeric_columns: numericCols,
           newly_available_tools: gained,
         },
         digest: `loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} cols`,
-        next: ["summary_stats", "run_regression", "hypothesis_test", "correlate"],
+        next: frame.entities
+          ? ["add_feature", "run_regression", "hypothesis_test"]
+          : ["summary_stats", "run_regression", "hypothesis_test"],
       };
 }
 
