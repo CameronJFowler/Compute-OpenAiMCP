@@ -155,6 +155,7 @@ export function Brief() {
   const tests = useWorkspace((s) => s.tests);
   const hypothesisAuthor = useWorkspace((s) => s.hypothesisAuthor);
   const windowAuthor = useWorkspace((s) => s.windowAuthor);
+  const reset = useWorkspace((s) => s.reset);
 
   // Local mirror so typing stays responsive; pushed to the store on each keystroke.
   const [draft, setDraft] = useState(hypothesis);
@@ -172,7 +173,19 @@ export function Brief() {
       {!datasetId && <ConnectGuide />}
       <Section
         title="Question"
-        accessory={<Author author={hypothesisAuthor} />}
+        accessory={
+          frame ? (
+            <button
+              onClick={() => reset()}
+              title="Start a new investigation"
+              className="text-[11px] text-ink3 hover:text-ink transition px-1.5 py-0.5 rounded border border-hair hover:border-hair2"
+            >
+              ↺ New
+            </button>
+          ) : (
+            <Author author={hypothesisAuthor} />
+          )
+        }
       >
         <textarea
           value={draft}

@@ -751,6 +751,32 @@ function ReportView({ view }: { view: Extract<WorkspaceView, { kind: "report" }>
   );
 }
 
+function FindingsPanel() {
+  const findings = useWorkspace((s) => s.findings);
+  if (findings.length === 0) return null;
+  return (
+    <div className="mb-5 border border-hair rounded-md bg-panel">
+      <div className="px-3.5 py-2 border-b border-hair">
+        <span className="label">Findings ({findings.length})</span>
+      </div>
+      <div className="p-3.5 space-y-3">
+        {findings.map((f) => (
+          <div key={f.id}>
+            <div className="text-[12.5px] leading-relaxed text-ink2">
+              <span className="tnum text-ink3 mr-1.5">{f.id}.</span>
+              {f.text}
+            </div>
+            <div className="text-2xs text-ink3 mt-0.5 ml-5">
+              step{f.supportingSteps.length > 1 ? "s" : ""}{" "}
+              {f.supportingSteps.join(", ")}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function WorkspacePanel() {
   const view = useWorkspace((s) => s.view);
   const progress = useWorkspace((s) => s.progress);
@@ -793,6 +819,8 @@ export function WorkspacePanel() {
           </div>
         </div>
       )}
+
+      {view.kind !== "empty" && <FindingsPanel />}
 
       {/* Keyed on the step count so each completed call re-mounts and the
           settle animation replays. Every tool call visibly changes something. */}
