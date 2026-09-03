@@ -323,18 +323,45 @@ async function autoAnalyzePipeline(): Promise<void> {
       }
     }
 
-    // Final step: record a provisional finding from completed steps
-    const completedSteps = useWorkspace
-      .getState()
-      .steps.filter((s) => s.status === "ok")
-      .map((s) => s.id);
+    // Final step: record a finding derived from actual analysis results
+    const state = useWorkspace.getState();
+    const completedSteps = state.steps.filter((s) => s.status === "ok");
+    const completedIds = completedSteps.map((s) => s.id);
 
-    if (completedSteps.length > 0 && tools["record_finding"]) {
+    if (completedIds.length > 0 && tools["record_finding"]) {
+      const bt = state.lastBacktest;
+      const regressionStep = completedSteps.find((s) => s.tool === "run_regression");
+      const backtestStep = completedSteps.find((s) => s.tool === "run_backtest");
+
+      const parts: string[] = [];
+
+      if (bt && backtestStep) {
+        parts.push(
+          `Momentum strategy (252-day) returned CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)} full-sample; out-of-sample (30%) CAGR ${(bt.outOfSample.cagr * 100).toFixed(1)}%, Sharpe ${bt.outOfSample.sharpe.toFixed(2)}.`,
+        );
+      }
+
+      if (regressionStep?.digest) {
+        parts.push(`${regressionStep.digest}.`);
+      }
+
+      if (parts.length === 0) {
+        // Fallback for unexpected paths
+        const anyStep = completedSteps.find(
+          (s) => s.tool !== "load_dataset" && s.tool !== "add_feature",
+        );
+        if (anyStep?.digest) parts.push(`${anyStep.digest}.`);
+      }
+
+      const finding =
+        parts.length > 0
+          ? parts.join(" ") + " Use build_report to assemble a full write-up."
+          : "Preliminary analysis complete — see results in the workspace. Call build_report to assemble findings.";
+
       setNextActor("human");
       await tools["record_finding"].execute({
-        finding:
-          "Preliminary analysis complete. Review the results above — the agent can now run additional tests, narrow the sample window, or call build_report to assemble the findings.",
-        supporting_steps: completedSteps,
+        finding,
+        supporting_steps: completedIds,
       });
     }
   } catch (err) {
