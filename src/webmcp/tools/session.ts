@@ -277,17 +277,28 @@ async function autoAnalyzePipeline(): Promise<void> {
   if (!frame) return;
 
   const isPanel = Boolean(frame.entities && frame.dates);
-  // Read tool set; run_backtest is absent until a signal column exists — that's ok.
+  const hasDates = Boolean(frame.dates);
+  // run_backtest is absent until a signal column exists — re-read after add_feature.
   let tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
 
   try {
     if (isPanel && tools["add_feature"]) {
-      // Panel path: momentum feature → backtest → factor regression.
-      setNextActor("human");
-      await tools["add_feature"].execute({ name: "momentum", formula: "momentum", window: 252 });
-
-      // Re-read after add_feature: run_backtest is now registered (signal exists).
-      tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
+      // Panel path: momentum → backtest → factor regression.
+      // Source column: prefer "ret" (returns), fall back to first numeric.
+      const momentumSrc =
+        "ret" in frame.columns
+          ? "ret"
+          : (frame.columnOrder.find((n) => frame.columns[n].kind === "numeric") ?? "");
+      if (momentumSrc) {
+        setNextActor("human");
+        await tools["add_feature"].execute({
+          transform: "momentum",
+          source_column: momentumSrc,
+          window: 252,
+        });
+        // Re-read — run_backtest is now registered (signal column exists).
+        tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
+      }
 
       const signals = signalColumnNames();
       if (signals.length > 0 && tools["run_backtest"]) {
@@ -295,10 +306,10 @@ async function autoAnalyzePipeline(): Promise<void> {
         await tools["run_backtest"].execute({ signal: signals[0] });
       }
 
-      // Factor regression: prefer mkt_rf/smb/hml; fall back to first non-forward numerics.
-      const dep = "ret" in frame.columns ? "ret" : frame.columnOrder.find(
-        (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
-      );
+      // Factor regression: prefer Fama-French factors; fall back to non-forward numerics.
+      const dep = "ret" in frame.columns
+        ? "ret"
+        : frame.columnOrder.find((n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking);
       const factorCols = ["mkt_rf", "smb", "hml"].filter(
         (n) => n in frame.columns && !frame.columns[n].forwardLooking && n !== dep,
       );
@@ -307,33 +318,52 @@ async function autoAnalyzePipeline(): Promise<void> {
         : frame.columnOrder
             .filter((n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking && n !== dep)
             .slice(0, 3);
-
       if (dep && independent.length > 0 && tools["run_regression"]) {
         setNextActor("human");
         await tools["run_regression"].execute({ dependent: dep, independent });
       }
-    } else if (tools["summary_stats"]) {
-      // Flat/series path: summary stats → smart regression (avoid price levels as regressors).
-      const numericCols = frame.columnOrder.filter(
-        (n) => frame.columns[n].kind === "numeric",
-      );
-      setNextActor("human");
-      await tools["summary_stats"].execute({ columns: numericCols.slice(0, 4) });
+    } else {
+      // Flat / series / cross-section path.
+      const numericCols = frame.columnOrder.filter((n) => frame.columns[n].kind === "numeric");
+      const categoryCols = frame.columnOrder.filter((n) => frame.columns[n].kind === "category");
 
+      if (tools["summary_stats"] && numericCols.length > 0) {
+        setNextActor("human");
+        await tools["summary_stats"].execute({ columns: numericCols.slice(0, 5) });
+      }
+
+      // Cross-section with categories (e.g. penguins): ANOVA / group test is more relevant
+      // than a plain regression. Test the first numeric against the first category.
+      if (categoryCols.length > 0 && numericCols.length > 0 && tools["hypothesis_test"]) {
+        setNextActor("human");
+        await tools["hypothesis_test"].execute({
+          test: "anova",
+          column: numericCols[numericCols.length - 1], // typically body_mass / last added
+          group_column: categoryCols[0],               // typically species
+        });
+      }
+
+      // Regression: avoid price-level cols as regressors; prefer known outcome names.
       if (numericCols.length >= 2 && tools["run_regression"]) {
-        // Prefer known return/outcome cols; exclude price-level cols from regressors.
         const priceish = new Set(["close", "open", "high", "low", "price", "volume", "adj_close"]);
         const dep =
-          numericCols.find((n) => ["ret", "return", "y", "distance", "velocity"].includes(n)) ??
-          numericCols[0];
+          numericCols.find((n) => ["ret", "return", "y", "distance", "velocity", "body_mass_g", "body_mass"].includes(n)) ??
+          numericCols[numericCols.length - 1];
         const candidates = numericCols.filter((n) => n !== dep && !priceish.has(n.toLowerCase()));
         const independent = (candidates.length > 0 ? candidates : numericCols.filter((n) => n !== dep)).slice(0, 3);
-        setNextActor("human");
-        await tools["run_regression"].execute({ dependent: dep, independent });
+        if (independent.length > 0) {
+          setNextActor("human");
+          await tools["run_regression"].execute({ dependent: dep, independent });
+        }
+      }
+
+      // Series-only (e.g. climate): also try a time trend if dates exist and no category.
+      if (hasDates && categoryCols.length === 0 && numericCols.length >= 2 && !isPanel) {
+        // regression already covered above — no extra step needed.
       }
     }
 
-    // Final step: record a finding with real numbers tied to the question.
+    // Record a finding with real numbers tied to the question.
     const state = useWorkspace.getState();
     const completedSteps = state.steps.filter((s) => s.status === "ok");
     const completedIds = completedSteps.map((s) => s.id);
@@ -342,7 +372,8 @@ async function autoAnalyzePipeline(): Promise<void> {
       const bt = state.lastBacktest;
       const regressionStep = completedSteps.find((s) => s.tool === "run_regression");
       const backtestStep = completedSteps.find((s) => s.tool === "run_backtest");
-      const hypothesis = state.hypothesis ? `Re: "${state.hypothesis.slice(0, 80)}" — ` : "";
+      const testStep = completedSteps.find((s) => s.tool === "hypothesis_test");
+      const q = state.hypothesis ? `Re: "${state.hypothesis.slice(0, 80)}" — ` : "";
 
       const parts: string[] = [];
 
@@ -350,31 +381,40 @@ async function autoAnalyzePipeline(): Promise<void> {
         const oos = bt.outOfSample;
         const survives = oos.sharpe > 0.3 && oos.cagr > 0;
         parts.push(
-          `${hypothesis}Momentum strategy (252-day): full-sample CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)}; out-of-sample CAGR ${(oos.cagr * 100).toFixed(1)}%, Sharpe ${oos.sharpe.toFixed(2)} — ${survives ? "survives" : "degrades"} out of sample.`,
+          `${q}Momentum (252-day): full-sample CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)}; out-of-sample CAGR ${(oos.cagr * 100).toFixed(1)}%, Sharpe ${oos.sharpe.toFixed(2)} — ${survives ? "survives" : "does not survive"} out of sample.`,
         );
       }
-
-      if (regressionStep?.digest) {
-        parts.push(regressionStep.digest + ".");
-      }
+      if (testStep?.digest) parts.push(testStep.digest + ".");
+      if (regressionStep?.digest) parts.push(regressionStep.digest + ".");
 
       if (parts.length === 0) {
         const anyAnalysis = completedSteps.find(
           (s) => !["set_hypothesis", "load_dataset", "add_feature"].includes(s.tool),
         );
-        if (anyAnalysis?.digest) parts.push(`${hypothesis}${anyAnalysis.digest}.`);
+        if (anyAnalysis?.digest) parts.push(`${q}${anyAnalysis.digest}.`);
       }
 
-      const finding =
+      const findingText =
         parts.length > 0
-          ? parts.join(" ") + " Call build_report to assemble the full write-up."
-          : `${hypothesis}Preliminary analysis complete — see results in the workspace.`;
+          ? parts.join(" ")
+          : `${q}Preliminary analysis complete — see results in the workspace.`;
 
       setNextActor("human");
       await tools["record_finding"].execute({
-        finding,
+        finding: findingText,
         supporting_steps: completedIds,
       });
+
+      // Auto-build the report so the workspace is fully populated.
+      if (tools["build_report"]) {
+        const conclusion = bt
+          ? `The 252-day momentum strategy on industry returns ${bt.outOfSample.sharpe > 0.3 && bt.outOfSample.cagr > 0 ? "survives" : "does not survive"} out-of-sample with Sharpe ${bt.outOfSample.sharpe.toFixed(2)} and CAGR ${(bt.outOfSample.cagr * 100).toFixed(1)}%.`
+          : regressionStep?.digest
+          ? `Preliminary regression complete: ${regressionStep.digest}. Further analysis recommended.`
+          : `Preliminary analysis complete. Review findings and run additional tests as needed.`;
+        setNextActor("human");
+        await tools["build_report"].execute({ conclusion });
+      }
     }
   } catch (err) {
     console.warn("[compute] auto-analysis pipeline error:", err);
