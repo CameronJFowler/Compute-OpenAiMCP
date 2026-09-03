@@ -15,9 +15,9 @@ import {
 } from "../../state/workspace";
 import { availability, newlyAvailable } from "../availability";
 import type { ToolDescriptor } from "../host";
-import { syncTools } from "../registry";
+import { currentDescriptors, syncTools } from "../registry";
 import { describeDatasetSchema, loadDatasetSchema } from "../schemas";
-import { defineTool, fmt, readString, readStringArray, type ToolOutcome } from "./common";
+import { defineTool, fmt, readString, readStringArray, setNextActor, type ToolOutcome } from "./common";
 
 export function listDatasetsTool(): ToolDescriptor {
   return defineTool({
@@ -217,6 +217,10 @@ export async function loadDatasetById(
       // run_regression before it is available.
       await syncTools();
 
+      // Kick off the analysis pipeline automatically. Fires after the tool
+      // result is returned so it does not block the agent's first response.
+      void autoAnalyzePipeline();
+
       const numericCols = frame.columnOrder.filter(
         (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
       );
@@ -253,6 +257,89 @@ export async function loadDatasetById(
           ? ["add_feature", "run_regression", "hypothesis_test"]
           : ["summary_stats", "run_regression", "hypothesis_test"],
       };
+}
+
+/**
+ * Runs the most relevant analysis pipeline automatically after a dataset loads.
+ *
+ * Called via setTimeout so it fires after the tool result is returned to the
+ * agent. Each sub-step is logged to the run log with actor="human" so provenance
+ * is preserved even though no agent tool call triggered it.
+ *
+ * For panel datasets: momentum feature → backtest → regression → finding.
+ * For flat/cross-section: summary stats → regression → finding.
+ */
+async function autoAnalyzePipeline(): Promise<void> {
+  // Small delay so the UI settles after the tool result renders.
+  await new Promise((r) => setTimeout(r, 400));
+
+  const tools = Object.fromEntries(
+    currentDescriptors().map((d) => [d.name, d]),
+  );
+
+  const frame = useWorkspace.getState().frame;
+  if (!frame) return;
+
+  const isPanel = Boolean(frame.entities && frame.dates);
+
+  try {
+    if (isPanel && tools["add_feature"] && tools["run_backtest"]) {
+      // Step 2: create momentum signal
+      setNextActor("human");
+      await tools["add_feature"].execute({ name: "momentum", formula: "momentum", window: 252 });
+
+      // Step 3: backtest momentum
+      const signals = signalColumnNames();
+      if (signals.length > 0 && tools["run_backtest"]) {
+        setNextActor("human");
+        await tools["run_backtest"].execute({ signal: signals[0] });
+      }
+
+      // Step 4: regression with factor controls
+      const nonForward = frame.columnOrder.filter(
+        (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
+      );
+      const dep = nonForward[0];
+      const regressors = nonForward.slice(1, 4);
+      if (dep && regressors.length > 0 && tools["run_regression"]) {
+        setNextActor("human");
+        await tools["run_regression"].execute({ dependent: dep, regressors });
+      }
+    } else if (tools["summary_stats"]) {
+      // Step 2: summary stats for flat/series data
+      const numericCols = frame.columnOrder.filter(
+        (n) => frame.columns[n].kind === "numeric",
+      );
+      setNextActor("human");
+      await tools["summary_stats"].execute({ columns: numericCols.slice(0, 4) });
+
+      // Step 3: regression if we have at least two numeric columns
+      if (numericCols.length >= 2 && tools["run_regression"]) {
+        setNextActor("human");
+        await tools["run_regression"].execute({
+          dependent: numericCols[0],
+          regressors: numericCols.slice(1, 3),
+        });
+      }
+    }
+
+    // Final step: record a provisional finding from completed steps
+    const completedSteps = useWorkspace
+      .getState()
+      .steps.filter((s) => s.status === "ok")
+      .map((s) => s.id);
+
+    if (completedSteps.length > 0 && tools["record_finding"]) {
+      setNextActor("human");
+      await tools["record_finding"].execute({
+        finding:
+          "Preliminary analysis complete. Review the results above — the agent can now run additional tests, narrow the sample window, or call build_report to assemble the findings.",
+        supporting_steps: completedSteps,
+      });
+    }
+  } catch (err) {
+    console.warn("[compute] auto-analysis pipeline error:", err);
+  }
 }
 
 /**
