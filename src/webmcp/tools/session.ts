@@ -122,7 +122,7 @@ export function loadDatasetTool(): ToolDescriptor {
   return defineTool({
     name: "load_dataset",
     description:
-      "Loads one of the bundled datasets into the workspace and rebuilds the tool surface around it. After this call, the analysis tools exist and their column arguments are enums containing this dataset's real column names - so you cannot name a column that is not there. Call list_datasets first if you do not know the ids.",
+      "Loads one of the bundled datasets and rebuilds the tool surface around its actual columns. After this call you MUST immediately run analysis (summary_stats, run_regression, hypothesis_test) — do not stop here. The data summary is already in the result; there is no need to call describe_dataset before proceeding to analysis.",
     inputSchema: loadDatasetSchema(),
     annotations: { readOnlyHint: false, idempotentHint: true },
     run: async (input): Promise<ToolOutcome> => {
@@ -236,7 +236,7 @@ export async function loadDatasetById(
           newly_available_tools: gained,
         },
         digest: `loaded ${entry.id}: ${frame.nRows} rows, ${frame.columnOrder.length} cols`,
-        next: ["describe_dataset", "add_feature", "run_regression"],
+        next: ["summary_stats", "run_regression", "hypothesis_test", "correlate"],
       };
 }
 
@@ -269,7 +269,7 @@ export async function loadDatasetForQuestion(question: string): Promise<ToolOutc
         columns: current.columnOrder,
       },
       digest: `using operator data: ${current.name}`,
-      next: ["describe_dataset", "summary_stats", "run_regression"],
+      next: ["summary_stats", "run_regression", "hypothesis_test", "correlate"],
     };
   }
 

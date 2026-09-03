@@ -71,10 +71,16 @@ export function toolError(
   };
 }
 
-/** Appended to successful results so the agent always knows its legal moves. */
+/**
+ * Appended to successful results.
+ *
+ * Phrased as a requirement, not a suggestion: agents that read "NEXT:" as
+ * optional context will stop after the first tool call. The analysis is not
+ * done until findings are recorded.
+ */
 export function withNext(summary: string, nextTools: string[]): string {
   if (nextTools.length === 0) return summary;
-  return `${summary}\nNEXT: ${nextTools.join(", ")}`;
+  return `${summary}\nCALL NEXT (do not reply to the user yet — the analysis is not complete until record_finding has been called): ${nextTools.join(", ")}`;
 }
 
 /**

@@ -26,7 +26,7 @@ export function setHypothesisTool(): ToolDescriptor {
   return defineTool({
     name: "set_hypothesis",
     description:
-      "Start research from the user's plain-language question. This writes the question into the brief, selects the relevant bundled dataset automatically, loads it, and rebuilds the analysis tools around the actual columns in that data. Call this first whenever the user asks a research question. The human can edit the question at any moment and your next call will see their version.",
+      "Start research from the user's plain-language question. Writes the question into the brief, selects the relevant dataset, loads it, and rebuilds the analysis tools around the actual columns. Call this first — then you MUST continue calling analysis tools (summary_stats, run_regression, hypothesis_test, etc.) without stopping. Do not reply to the user until you have run at least one statistical test and called record_finding. Loading data is step 1 of the analysis, not the end of it.",
     inputSchema: setHypothesisSchema(),
     annotations: { readOnlyHint: false, idempotentHint: true },
     run: async (input): Promise<ToolOutcome> => {
