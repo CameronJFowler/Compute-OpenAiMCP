@@ -304,9 +304,10 @@ function buildConclusion({
     if (!survives) furtherNeeded.push("extend the sample window or adjust the lookback period");
   }
 
-  // Hypothesis test verdict
+  // Hypothesis test verdict — use the test recorded by this specific step, not the last
+  // test in state (which may be a regression coefficient test added afterwards).
   if (testStep) {
-    const lastTest = state.tests[state.tests.length - 1];
+    const lastTest = state.tests.find((t) => t.step === testStep.id) ?? state.tests[state.tests.length - 1];
     if (lastTest) {
       const sig = lastTest.pValue <= testing.bonferroniAlpha;
       const borderline = !sig && lastTest.pValue <= testing.naiveAlpha;
@@ -371,6 +372,8 @@ async function autoAnalyzePipeline(): Promise<void> {
           window: 252,
         });
         // Re-read — run_backtest is now registered (signal column exists).
+        // A brief yield lets Zustand state propagate before we re-query.
+        await new Promise((r) => setTimeout(r, 100));
         tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
       }
 
@@ -407,22 +410,25 @@ async function autoAnalyzePipeline(): Promise<void> {
       }
 
       // Cross-section with categories (e.g. penguins): ANOVA / group test is more relevant
-      // than a plain regression. Test the first numeric against the first category.
+      // than a plain regression. Use the same outcome column the regression will use so
+      // both tools answer the same question (body_mass_g, not year).
+      const priceish = new Set(["close", "open", "high", "low", "price", "volume", "adj_close"]);
+      const dep =
+        numericCols.find((n) => ["ret", "return", "y", "distance", "velocity", "body_mass_g", "body_mass"].includes(n)) ??
+        numericCols.find((n) => !priceish.has(n.toLowerCase())) ??
+        numericCols[numericCols.length - 1];
+
       if (categoryCols.length > 0 && numericCols.length > 0 && tools["hypothesis_test"]) {
         setNextActor("human");
         await tools["hypothesis_test"].execute({
           test: "anova",
-          column: numericCols[numericCols.length - 1], // typically body_mass / last added
-          group_column: categoryCols[0],               // typically species
+          column: dep,               // same outcome variable as the regression
+          group_column: categoryCols[0],
         });
       }
 
       // Regression: avoid price-level cols as regressors; prefer known outcome names.
       if (numericCols.length >= 2 && tools["run_regression"]) {
-        const priceish = new Set(["close", "open", "high", "low", "price", "volume", "adj_close"]);
-        const dep =
-          numericCols.find((n) => ["ret", "return", "y", "distance", "velocity", "body_mass_g", "body_mass"].includes(n)) ??
-          numericCols[numericCols.length - 1];
         const candidates = numericCols.filter((n) => n !== dep && !priceish.has(n.toLowerCase()));
         const independent = (candidates.length > 0 ? candidates : numericCols.filter((n) => n !== dep)).slice(0, 3);
         if (independent.length > 0) {
