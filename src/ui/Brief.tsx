@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { DEFAULT_ALPHA } from "../config";
+import { APP_NAME, DEFAULT_ALPHA } from "../config";
 import { getTestingSummary, useWorkspace } from "../state/workspace";
 
 function Section({
@@ -64,6 +64,75 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: stri
 }
 
 /**
+ * Cold-start panel shown before any dataset is loaded.
+ *
+ * Surfaces the value proposition and step-by-step connection instructions
+ * so a judge or first-time visitor can get an agent running immediately.
+ */
+function ConnectGuide() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="px-4 py-4 border-b border-hair">
+      <div className="mb-3">
+        <div className="text-[13.5px] font-medium text-ink mb-1">{APP_NAME}</div>
+        <p className="text-[12px] text-ink3 leading-relaxed">
+          A statistical research bench where AI agents and humans share one
+          live workspace — no backend, no API keys, runs entirely in the
+          browser via WebMCP.
+        </p>
+      </div>
+
+      <div className="space-y-1.5 mb-3">
+        {[
+          "5 bundled datasets: climate, finance, biology, astronomy",
+          "Numbers go to the agent; charts render here for you",
+          "Every tool call logged — findings must cite their source",
+          "Approval gates before expensive operations",
+        ].map((item) => (
+          <div key={item} className="flex items-start gap-1.5">
+            <span className="text-accent text-[11px] mt-[2px] shrink-0">+</span>
+            <span className="text-[11.5px] text-ink2 leading-relaxed">{item}</span>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 rounded border border-hair bg-panel hover:border-hair2 hover:text-ink transition text-[11.5px] text-ink2"
+      >
+        <span>Connect with ChatGPT</span>
+        <span className="text-ink3">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2">
+          <ol className="space-y-2">
+            {[
+              <>Open <strong className="text-ink font-medium">ChatGPT</strong> and start a new conversation.</>,
+              <>Paste this URL into the chat or open it inside ChatGPT's browser: <span className="font-mono text-[10.5px] text-accent break-all">https://computeopenai.netlify.app/</span></>,
+              <>Ask a plain-language research question — e.g. <em className="text-ink2">"Is there a momentum effect in US industry returns?"</em></>,
+              <>Watch the <strong className="text-ink font-medium">Agent</strong> indicator in the top-right: the capability count jumps from 4 to 12+ when a dataset loads.</>,
+              <>Results appear here as the agent calls tools. You can edit the question or narrow the sample window between calls.</>,
+            ].map((step, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="text-[10px] text-ink3 tnum mt-[3px] shrink-0 w-3">{i + 1}.</span>
+                <span className="text-[11.5px] text-ink2 leading-relaxed">{step}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="text-[10.5px] text-ink3 leading-relaxed pt-1 border-t border-hair">
+            Local testing: run <span className="font-mono">npm run dev</span> then
+            enable the WebMCP flag in Chrome at{" "}
+            <span className="font-mono">chrome://flags</span>.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The research brief.
  *
  * Everything here is editable by the operator while the agent is running, and
@@ -100,6 +169,7 @@ export function Brief() {
 
   return (
     <div className="h-full overflow-y-auto">
+      {!datasetId && <ConnectGuide />}
       <Section
         title="Question"
         accessory={<Author author={hypothesisAuthor} />}

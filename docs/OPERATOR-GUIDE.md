@@ -23,11 +23,12 @@ tools directly in the browser whenever a compatible host is present.
 
 ### ChatGPT in-app browser
 
-1. Open the deployed Compute URL from a ChatGPT conversation.
+1. Open `https://computeopenai.netlify.app/` from within a ChatGPT conversation.
 2. Ask a plain-language research question; do not name a tool or dataset.
    Compute selects and loads the matching bundled data from the question.
-3. When the page header changes from `Session local` to `Session live`, the
-   agent browser has discovered the page's tool surface.
+3. When the **Agent** indicator in the top-right header shows "connected" and
+   the capability count jumps from 4 to 12+, the agent has discovered the
+   page's tool surface and loaded a dataset.
 
 ### Chromium testing browser
 
@@ -38,9 +39,10 @@ tools directly in the browser whenever a compatible host is present.
 
 ### Success criteria
 
-- The header says `Session live`.
-- Asking the first question selects and loads a dataset, changing the action count from 4 to 12.
-- Creating a feature changes it again.
+- The **Agent** indicator in the top-right header shows "connected."
+- Asking the first question selects and loads a dataset; the capability count
+  jumps from 4 to 12.
+- Creating a feature changes it to 13, adding a backtest changes it to 14.
 - Agent-produced results appear in the workspace and in the session record.
 - An expensive bootstrap presents an approval card instead of running silently.
 
@@ -102,7 +104,7 @@ experience or the demo.
 - [x] Public repository with MIT licence
 - [x] Working static build and documented run instructions
 - [x] WebMCP tool registry with schemas generated from active page state
-- [ ] Live public URL
+- [x] Live public URL: https://computeopenai.netlify.app/
 - [ ] Verify one real agent call in a compatible browser
 - [ ] Public sub-three-minute demo video with audio
 - [ ] Devpost submission text and URL

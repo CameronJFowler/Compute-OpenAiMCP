@@ -6,7 +6,7 @@ export const OPERATOR_GUIDE_URL =
   "https://github.com/CameronJFowler/Compute-OpenAiMCP/blob/main/docs/OPERATOR-GUIDE.md";
 
 export const APP_TAGLINE =
-  "A research bench where you can check the agent's work.";
+  "A statistical research bench. Browser-only, no backend, powered by WebMCP.";
 
 /** Significance level before any session adjustment. */
 export const DEFAULT_ALPHA = 0.05;
