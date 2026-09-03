@@ -273,57 +273,67 @@ async function autoAnalyzePipeline(): Promise<void> {
   // Small delay so the UI settles after the tool result renders.
   await new Promise((r) => setTimeout(r, 400));
 
-  const tools = Object.fromEntries(
-    currentDescriptors().map((d) => [d.name, d]),
-  );
-
   const frame = useWorkspace.getState().frame;
   if (!frame) return;
 
   const isPanel = Boolean(frame.entities && frame.dates);
+  // Read tool set; run_backtest is absent until a signal column exists — that's ok.
+  let tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
 
   try {
-    if (isPanel && tools["add_feature"] && tools["run_backtest"]) {
-      // Step 2: create momentum signal
+    if (isPanel && tools["add_feature"]) {
+      // Panel path: momentum feature → backtest → factor regression.
       setNextActor("human");
       await tools["add_feature"].execute({ name: "momentum", formula: "momentum", window: 252 });
 
-      // Step 3: backtest momentum
+      // Re-read after add_feature: run_backtest is now registered (signal exists).
+      tools = Object.fromEntries(currentDescriptors().map((d) => [d.name, d]));
+
       const signals = signalColumnNames();
       if (signals.length > 0 && tools["run_backtest"]) {
         setNextActor("human");
         await tools["run_backtest"].execute({ signal: signals[0] });
       }
 
-      // Step 4: regression with factor controls
-      const nonForward = frame.columnOrder.filter(
+      // Factor regression: prefer mkt_rf/smb/hml; fall back to first non-forward numerics.
+      const dep = "ret" in frame.columns ? "ret" : frame.columnOrder.find(
         (n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking,
       );
-      const dep = nonForward[0];
-      const independent = nonForward.slice(1, 4);
+      const factorCols = ["mkt_rf", "smb", "hml"].filter(
+        (n) => n in frame.columns && !frame.columns[n].forwardLooking && n !== dep,
+      );
+      const independent = factorCols.length > 0
+        ? factorCols
+        : frame.columnOrder
+            .filter((n) => frame.columns[n].kind === "numeric" && !frame.columns[n].forwardLooking && n !== dep)
+            .slice(0, 3);
+
       if (dep && independent.length > 0 && tools["run_regression"]) {
         setNextActor("human");
         await tools["run_regression"].execute({ dependent: dep, independent });
       }
     } else if (tools["summary_stats"]) {
-      // Step 2: summary stats for flat/series data
+      // Flat/series path: summary stats → smart regression (avoid price levels as regressors).
       const numericCols = frame.columnOrder.filter(
         (n) => frame.columns[n].kind === "numeric",
       );
       setNextActor("human");
       await tools["summary_stats"].execute({ columns: numericCols.slice(0, 4) });
 
-      // Step 3: regression if we have at least two numeric columns
       if (numericCols.length >= 2 && tools["run_regression"]) {
+        // Prefer known return/outcome cols; exclude price-level cols from regressors.
+        const priceish = new Set(["close", "open", "high", "low", "price", "volume", "adj_close"]);
+        const dep =
+          numericCols.find((n) => ["ret", "return", "y", "distance", "velocity"].includes(n)) ??
+          numericCols[0];
+        const candidates = numericCols.filter((n) => n !== dep && !priceish.has(n.toLowerCase()));
+        const independent = (candidates.length > 0 ? candidates : numericCols.filter((n) => n !== dep)).slice(0, 3);
         setNextActor("human");
-        await tools["run_regression"].execute({
-          dependent: numericCols[0],
-          independent: numericCols.slice(1, 3),
-        });
+        await tools["run_regression"].execute({ dependent: dep, independent });
       }
     }
 
-    // Final step: record a finding derived from actual analysis results
+    // Final step: record a finding with real numbers tied to the question.
     const state = useWorkspace.getState();
     const completedSteps = state.steps.filter((s) => s.status === "ok");
     const completedIds = completedSteps.map((s) => s.id);
@@ -332,34 +342,33 @@ async function autoAnalyzePipeline(): Promise<void> {
       const bt = state.lastBacktest;
       const regressionStep = completedSteps.find((s) => s.tool === "run_regression");
       const backtestStep = completedSteps.find((s) => s.tool === "run_backtest");
+      const hypothesis = state.hypothesis ? `Re: "${state.hypothesis.slice(0, 80)}" — ` : "";
 
       const parts: string[] = [];
 
       if (bt && backtestStep) {
+        const oos = bt.outOfSample;
+        const survives = oos.sharpe > 0.3 && oos.cagr > 0;
         parts.push(
-          `Momentum strategy (252-day) returned CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)} full-sample; out-of-sample (30%) CAGR ${(bt.outOfSample.cagr * 100).toFixed(1)}%, Sharpe ${bt.outOfSample.sharpe.toFixed(2)}.`,
+          `${hypothesis}Momentum strategy (252-day): full-sample CAGR ${(bt.full.cagr * 100).toFixed(1)}%, Sharpe ${bt.full.sharpe.toFixed(2)}; out-of-sample CAGR ${(oos.cagr * 100).toFixed(1)}%, Sharpe ${oos.sharpe.toFixed(2)} — ${survives ? "survives" : "degrades"} out of sample.`,
         );
       }
 
       if (regressionStep?.digest) {
-        parts.push(`${regressionStep.digest}.`);
+        parts.push(regressionStep.digest + ".");
       }
 
       if (parts.length === 0) {
-        // Fallback: find any analysis step (not set_hypothesis/load_dataset/add_feature)
-        const anyStep = completedSteps.find(
-          (s) =>
-            s.tool !== "set_hypothesis" &&
-            s.tool !== "load_dataset" &&
-            s.tool !== "add_feature",
+        const anyAnalysis = completedSteps.find(
+          (s) => !["set_hypothesis", "load_dataset", "add_feature"].includes(s.tool),
         );
-        if (anyStep?.digest) parts.push(`${anyStep.digest}.`);
+        if (anyAnalysis?.digest) parts.push(`${hypothesis}${anyAnalysis.digest}.`);
       }
 
       const finding =
         parts.length > 0
-          ? parts.join(" ") + " Use build_report to assemble a full write-up."
-          : "Preliminary analysis complete — see results in the workspace. Call build_report to assemble findings.";
+          ? parts.join(" ") + " Call build_report to assemble the full write-up."
+          : `${hypothesis}Preliminary analysis complete — see results in the workspace.`;
 
       setNextActor("human");
       await tools["record_finding"].execute({
